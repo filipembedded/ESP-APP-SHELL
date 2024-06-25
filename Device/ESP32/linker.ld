@@ -1,147 +1,84 @@
-/*  Default entry point:  */
-ENTRY(call_start_cpu0);
+/*
+Linker file used to link the bootloader.
+*/
+
+
+/* Simplified memory map for the bootloader
+
+   The main purpose is to make sure the bootloader can load into main memory
+   without overwriting itself.
+*/
 
 MEMORY
 {
-  iram0_0_seg (RX) :                 org = 0x40080000, len = 0x20000
-
-  iram0_2_seg (RX) :                 org = 0x400D0018, len = 0x330000
-
-  dram0_0_seg (RW) :                 org = 0x3FFB0000 + 0x10000,
-                                     len = 0x50000 - 0x0 - 0x10000
-
-  drom0_0_seg (R) :                  org = 0x3F400010, len = 0x800000
-
-  rtc_iram_seg(RWX) :                org = 0x400C0000, len = 0x2000
-
-  rtc_slow_seg(RW)  :                org = 0x50000000,
-                                     len = 0x1000
+  /* IRAM POOL1, used for APP CPU cache. Bootloader runs from here during the final stage of loading the app because APP CPU is still held in reset, the main app enables APP CPU cache */
+  iram_loader_seg (RWX) :           org = 0x40078000, len = 0x8000  /* 32KB, APP CPU cache */
+  /* 63kB, IRAM. We skip the first 1k to prevent the entry point being
+     placed into the same range as exception vectors in the app.
+     This leads to idf_monitor decoding ROM bootloader "entry 0x40080xxx"
+     message as one of the exception vectors, which looks scary to users.
+  */
+  iram_seg (RWX) :                  org = 0x40080400, len = 0xfc00
+  /* 64k at the end of DRAM, after ROM bootloader stack */
+  dram_seg (RW) :                  	org = 0x3FFF0000, len = 0x10000
 }
 
-/* Heap ends at top of dram0_0_seg */
-_heap_end = 0x40000000 - 0x0;
+/*  Default entry point:  */
+ENTRY(call_start_cpu0);
+
 
 SECTIONS
 {
-  /* RTC fast memory holds RTC wake stub code,
-     including from any source file named rtc_wake_stub*.c
-  */
-  .rtc.text :
-  {
-    . = ALIGN(4);
-    *(.rtc.literal .rtc.text)
-    *rtc_wake_stub*.o(.literal .text .literal.* .text.*)
-  } >rtc_iram_seg
 
-  /* RTC slow memory holds RTC wake stub
-     data/rodata, including from any source file
-     named rtc_wake_stub*.c
-  */
-  .rtc.data :
+  .iram_loader.text :
   {
-    _rtc_data_start = ABSOLUTE(.);
-    *(.rtc.data)
-    *(.rtc.rodata)
-    *rtc_wake_stub*.o(.data .rodata .data.* .rodata.* .bss .bss.*)
-    _rtc_data_end = ABSOLUTE(.);
-  } > rtc_slow_seg
+    . = ALIGN (16);
+    _loader_text_start = ABSOLUTE(.);
+    *(.stub .gnu.warning .gnu.linkonce.literal.* .gnu.linkonce.t.*.literal .gnu.linkonce.t.*)
+     *(.iram1 .iram1.*) /* catch stray IRAM_ATTR */
+    *liblog.a:(.literal .text .literal.* .text.*)
+    *libgcc.a:(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_clock_loader.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_common_loader.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_flash.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_random.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_random*.*(.literal.bootloader_random_disable .text.bootloader_random_disable)
+    *libbootloader_support.a:bootloader_efuse_esp32.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_utility.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_sha.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_console_loader.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:bootloader_panic.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:esp_image_format.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:flash_encrypt.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:flash_partitions.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:secure_boot.*(.literal .text .literal.* .text.*)
+    *libbootloader_support.a:secure_boot_signatures.*(.literal .text .literal.* .text.*)
+    *libmicro-ecc.a:*.*(.literal .text .literal.* .text.*)
+    *libspi_flash.a:*.*(.literal .text .literal.* .text.*)
+    *libhal.a:wdt_hal_iram.*(.literal .text .literal.* .text.*)
+    *libesp_hw_support.a:rtc_clk.*(.literal .text .literal.* .text.*)
+    *libesp_hw_support.a:rtc_time.*(.literal .text .literal.* .text.*)
+    *libefuse.a:*.*(.literal .text .literal.* .text.*)
+    *(.fini.literal)
+    *(.fini)
+    *(.gnu.version)
+    _loader_text_end = ABSOLUTE(.);
+  } > iram_loader_seg
 
-  /* RTC bss, from any source file named rtc_wake_stub*.c */
-  .rtc.bss (NOLOAD) :
+  .iram.text :
   {
-    _rtc_bss_start = ABSOLUTE(.);
-    *rtc_wake_stub*.o(.bss .bss.*)
-    *rtc_wake_stub*.o(COMMON)
-    _rtc_bss_end = ABSOLUTE(.);
-  } > rtc_slow_seg
-
-  /* Send .iram0 code to iram */
-  .iram0.vectors :
-  {
-    /* Vectors go to IRAM */
-    _init_start = ABSOLUTE(.);
-    /* Vectors according to builds/RF-2015.2-win32/esp108_v1_2_s5_512int_2/config.html */
-    . = 0x0;
-    KEEP(*(.WindowVectors.text));
-    . = 0x180;
-    KEEP(*(.Level2InterruptVector.text));
-    . = 0x1c0;
-    KEEP(*(.Level3InterruptVector.text));
-    . = 0x200;
-    KEEP(*(.Level4InterruptVector.text));
-    . = 0x240;
-    KEEP(*(.Level5InterruptVector.text));
-    . = 0x280;
-    KEEP(*(.DebugExceptionVector.text));
-    . = 0x2c0;
-    KEEP(*(.NMIExceptionVector.text));
-    . = 0x300;
-    KEEP(*(.KernelExceptionVector.text));
-    . = 0x340;
-    KEEP(*(.UserExceptionVector.text));
-    . = 0x3C0;
-    KEEP(*(.DoubleExceptionVector.text));
-    . = 0x400;
-    *(.*Vector.literal)
-
-    *(.UserEnter.literal);
-    *(.UserEnter.text);
     . = ALIGN (16);
     *(.entry.text)
     *(.init.literal)
     *(.init)
-    _init_end = ABSOLUTE(.);
-  } > iram0_0_seg
+  } > iram_seg
 
-  .iram0.text :
-  {
-    /* Code marked as runnning out of IRAM */
-    _iram_text_start = ABSOLUTE(.);
-    *(.iram1 .iram1.*)
-    *libfreertos.a:(.literal .text .literal.* .text.*)
-    *libesp32.a:panic.o(.literal .text .literal.* .text.*)
-    *libesp32.a:core_dump.o(.literal .text .literal.* .text.*)
-    *libphy.a:(.literal .text .literal.* .text.*)
-    *librtc.a:(.literal .text .literal.* .text.*)
-    *libhal.a:(.literal .text .literal.* .text.*)
-    *libcoexist.a:(.literal .text .literal.* .text.*)
-    /* libpp */
-    *libpp.a:esf_buf.o(.literal .text .literal.* .text.*)
-    *libpp.a:if_hwctrl.o(.literal .text .literal.* .text.*)
-    *libpp.a:lmac.o(.literal .text .literal.* .text.*)
-    *libpp.a:pm.o(.literal .text .literal.* .text.*)
-    *libpp.a:pm_for_bcn_only_mode.o(.literal .text .literal.* .text.*)
-    *libpp.a:pp.o(.literal .text .literal.* .text.*)
-    *libpp.a:rate_control.o(.literal .text .literal.* .text.*)
-    *libpp.a:trc.o(.literal .text .literal.* .text.*)
-    *libpp.a:wdev.o(.literal .text .literal.* .text.*)
-    _iram_text_end = ABSOLUTE(.);
-  } > iram0_0_seg
-
-  .dram0.data :
-  {
-    _data_start = ABSOLUTE(.);
-    KEEP(*(.data))
-    KEEP(*(.data.*))
-    KEEP(*(.gnu.linkonce.d.*))
-    KEEP(*(.data1))
-    KEEP(*(.sdata))
-    KEEP(*(.sdata.*))
-    KEEP(*(.gnu.linkonce.s.*))
-    KEEP(*(.sdata2))
-    KEEP(*(.sdata2.*))
-    KEEP(*(.gnu.linkonce.s2.*))
-    KEEP(*(.jcr))
-    *(.dram1 .dram1.*)
-    *libesp32.a:panic.o(.rodata .rodata.*)
-    _data_end = ABSOLUTE(.);
-    . = ALIGN(4);
-  } >dram0_0_seg
 
   /* Shared RAM */
   .dram0.bss (NOLOAD) :
   {
     . = ALIGN (8);
+    _dram_start = ABSOLUTE(.);
     _bss_start = ABSOLUTE(.);
     *(.dynsbss)
     *(.sbss)
@@ -154,20 +91,34 @@ SECTIONS
     *(.dynbss)
     *(.bss)
     *(.bss.*)
-    *(.share.mem)
     *(.gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN (8);
     _bss_end = ABSOLUTE(.);
-    _heap_start = ABSOLUTE(.);
-  } >dram0_0_seg
+  } >dram_seg
 
-  .flash.rodata :
+  .dram0.data :
+  {
+    _data_start = ABSOLUTE(.);
+    *(.data)
+    *(.data.*)
+    *(.gnu.linkonce.d.*)
+    *(.data1)
+    *(.sdata)
+    *(.sdata.*)
+    *(.gnu.linkonce.s.*)
+    *(.sdata2)
+    *(.sdata2.*)
+    *(.gnu.linkonce.s2.*)
+    *(.jcr)
+    _data_end = ABSOLUTE(.);
+  } >dram_seg
+
+  .dram0.rodata :
   {
     _rodata_start = ABSOLUTE(.);
     *(.rodata)
     *(.rodata.*)
-    *(.irom1.text) /* catch stray ICACHE_RODATA_ATTR */
     *(.gnu.linkonce.r.*)
     *(.rodata1)
     __XT_EXCEPTION_TABLE_ = ABSOLUTE(.);
@@ -179,13 +130,13 @@ SECTIONS
     . = (. + 3) & ~ 3;
     /*  C++ constructor and destructor tables, properly ordered:  */
     __init_array_start = ABSOLUTE(.);
-    KEEP (*crtbegin.o(.ctors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o) .ctors))
+    KEEP (*crtbegin.*(.ctors))
+    KEEP (*(EXCLUDE_FILE (*crtend.*) .ctors))
     KEEP (*(SORT(.ctors.*)))
     KEEP (*(.ctors))
     __init_array_end = ABSOLUTE(.);
-    KEEP (*crtbegin.o(.dtors))
-    KEEP (*(EXCLUDE_FILE (*crtend.o) .dtors))
+    KEEP (*crtbegin.*(.dtors))
+    KEEP (*(EXCLUDE_FILE (*crtend.*) .dtors))
     KEEP (*(SORT(.dtors.*)))
     KEEP (*(.dtors))
     /*  C++ exception handlers table:  */
@@ -197,92 +148,45 @@ SECTIONS
     *(.dynamic)
     *(.gnu.version_d)
     _rodata_end = ABSOLUTE(.);
-    /* Literals are also RO data. */
+	/* Literals are also RO data. */
     _lit4_start = ABSOLUTE(.);
     *(*.lit4)
     *(.lit4.*)
     *(.gnu.linkonce.lit4.*)
     _lit4_end = ABSOLUTE(.);
     . = ALIGN(4);
-  } >drom0_0_seg
+    _dram_end = ABSOLUTE(.);
+  } >dram_seg
 
-  .flash.text :
+  .iram.text :
   {
     _stext = .;
     _text_start = ABSOLUTE(.);
     *(.literal .text .literal.* .text.* .stub .gnu.warning .gnu.linkonce.literal.* .gnu.linkonce.t.*.literal .gnu.linkonce.t.*)
-    *(.irom0.text) /* catch stray ICACHE_RODATA_ATTR */
+    *(.iram .iram.*) /* catch stray IRAM_ATTR */
     *(.fini.literal)
     *(.fini)
     *(.gnu.version)
     _text_end = ABSOLUTE(.);
     _etext = .;
-  } >iram0_2_seg
-}
+  } > iram_seg
 
-PROVIDE ( UART0 = 0x3ff40000 );
-PROVIDE ( SPI1 = 0x3ff42000 );
-PROVIDE ( SPI0 = 0x3ff43000 );
-PROVIDE ( GPIO = 0x3ff44000 );
-PROVIDE ( SIGMADELTA = 0x3ff44f00 );
-PROVIDE ( UHCI1 = 0x3ff4C000 );
-PROVIDE ( I2S0 = 0x3ff4F000 );
-PROVIDE ( UART1 = 0x3ff50000 );
-PROVIDE ( I2C0 = 0x3ff53000 );
-PROVIDE ( UHCI0 = 0x3ff54000 );
-PROVIDE ( RMT = 0x3ff56000 );
-PROVIDE ( RMTMEM = 0x3ff56800 );
-PROVIDE ( PCNT = 0x3ff57000 );
-PROVIDE ( LEDC = 0x3ff59000 );
-PROVIDE ( TIMERG0 = 0x3ff5F000 );
-PROVIDE ( TIMERG1 = 0x3ff60000 );
-PROVIDE ( SPI2 = 0x3ff64000 );
-PROVIDE ( SPI3 = 0x3ff65000 );
-PROVIDE ( I2C1 = 0x3ff67000 );
-PROVIDE ( I2S1 = 0x3ff6D000 );
-PROVIDE ( UART2 = 0x3ff6E000 );
-PROVIDE ( SDMMC = 0x3ff68000 );
+}
 
 /*
 ESP32 ROM address table
-Generated for ROM with MD5sum:
-ab8282ae908fe9e7a63fb2a4ac2df013  ../../rom_image/prorom.elf
 */
-PROVIDE ( abort = 0x4000bba4 );
-PROVIDE ( abs = 0x40056340 );
-PROVIDE ( __absvdi2 = 0x4006387c );
-PROVIDE ( __absvsi2 = 0x40063868 );
 PROVIDE ( Add2SelfBigHex256 = 0x40015b7c );
 PROVIDE ( AddBigHex256 = 0x40015b28 );
 PROVIDE ( AddBigHexModP256 = 0x40015c98 );
-PROVIDE ( __adddf3 = 0x40002590 );
 PROVIDE ( AddP256 = 0x40015c74 );
 PROVIDE ( AddPdiv2_256 = 0x40015ce0 );
-PROVIDE ( __addsf3 = 0x400020e8 );
-PROVIDE ( __addvdi3 = 0x40002cbc );
-PROVIDE ( __addvsi3 = 0x40002c98 );
-PROVIDE ( aes_128_cbc_decrypt = 0x4005cc7c );
-PROVIDE ( aes_128_cbc_encrypt = 0x4005cc18 );
-PROVIDE ( aes_unwrap = 0x4005ccf0 );
 PROVIDE ( app_gpio_arg = 0x3ffe003c );
 PROVIDE ( app_gpio_handler = 0x3ffe0040 );
-PROVIDE ( __ascii_wctomb = 0x40058ef0 );
-PROVIDE ( asctime = 0x40059588 );
-PROVIDE ( asctime_r = 0x40000ec8 );
-PROVIDE ( __ashldi3 = 0x4000c818 );
-PROVIDE ( __ashrdi3 = 0x4000c830 );
-PROVIDE ( atoi = 0x400566c4 );
-PROVIDE ( _atoi_r = 0x400566d4 );
-PROVIDE ( atol = 0x400566ec );
-PROVIDE ( _atol_r = 0x400566fc );
-PROVIDE ( base64_decode = 0x4005ced8 );
-PROVIDE ( base64_encode = 0x4005cdbc );
 PROVIDE ( BasePoint_x_256 = 0x3ff97488 );
 PROVIDE ( BasePoint_y_256 = 0x3ff97468 );
 PROVIDE ( bigHexInversion256 = 0x400168f0 );
 PROVIDE ( bigHexP256 = 0x3ff973bc );
-PROVIDE ( __bswapdi2 = 0x400649c4 );
-PROVIDE ( __bswapsi2 = 0x4006499c );
 PROVIDE ( btdm_r_ble_bt_handler_tab_p_get = 0x40019b0c );
 PROVIDE ( btdm_r_btdm_option_data_p_get = 0x40010004 );
 PROVIDE ( btdm_r_btdm_rom_version_get = 0x40010078 );
@@ -294,28 +198,17 @@ PROVIDE ( btdm_r_modules_func_p_get = 0x4005427c );
 PROVIDE ( btdm_r_modules_func_p_set = 0x40054270 );
 PROVIDE ( btdm_r_plf_func_p_set = 0x40054288 );
 PROVIDE ( bt_util_buf_env = 0x3ffb8bd4 );
-PROVIDE ( bzero = 0x4000c1f4 );
-PROVIDE ( cache_flash_mmu_set = 0x400095e0 );
-PROVIDE ( Cache_Flush = 0x40009a14 );
-PROVIDE ( Cache_Read_Disable = 0x40009ab8 );
-PROVIDE ( Cache_Read_Enable = 0x40009a84 );
-PROVIDE ( Cache_Read_Init = 0x40009950 );
-PROVIDE ( cache_sram_mmu_set = 0x400097f4 );
+PROVIDE ( cache_flash_mmu_set_rom = 0x400095e0 );
+PROVIDE ( Cache_Flush_rom = 0x40009a14 );
+PROVIDE ( Cache_Read_Disable_rom = 0x40009ab8 );
+PROVIDE ( Cache_Read_Enable_rom = 0x40009a84 );
+PROVIDE ( Cache_Read_Init_rom = 0x40009950 );
+PROVIDE ( cache_sram_mmu_set_rom = 0x400097f4 );
 /* This is static function, but can be used, not generated by script*/
 PROVIDE ( calc_rtc_memory_crc = 0x40008170 );
 PROVIDE ( calloc = 0x4000bee4 );
-PROVIDE ( _calloc_r = 0x4000bbf8 );
-PROVIDE ( check_pos = 0x400068b8 );
-PROVIDE ( _cleanup = 0x40001df8 );
-PROVIDE ( _cleanup_r = 0x40001d48 );
 PROVIDE ( __clear_cache = 0x40063860 );
-PROVIDE ( close = 0x40001778 );
 PROVIDE ( _close_r = 0x4000bd3c );
-PROVIDE ( __clrsbdi2 = 0x40064a38 );
-PROVIDE ( __clrsbsi2 = 0x40064a20 );
-PROVIDE ( __clzdi2 = 0x4000ca50 );
-PROVIDE ( __clzsi2 = 0x4000c7e8 );
-PROVIDE ( __cmpdi2 = 0x40063820 );
 PROVIDE ( co_default_bdaddr = 0x3ffae704 );
 PROVIDE ( co_null_bdaddr = 0x3ffb80e0 );
 PROVIDE ( co_sca2ppm = 0x3ff971e8 );
@@ -325,13 +218,8 @@ PROVIDE ( crc32_be = 0x4005d024 );
 PROVIDE ( crc32_le = 0x4005cfec );
 PROVIDE ( crc8_be = 0x4005d114 );
 PROVIDE ( crc8_le = 0x4005d0e0 );
-PROVIDE ( creat = 0x40000e8c );
-PROVIDE ( ctime = 0x400595b0 );
-PROVIDE ( ctime_r = 0x400595c4 );
 PROVIDE ( _ctype_ = 0x3ff96354 );
 PROVIDE ( __ctype_ptr__ = 0x3ff96350 );
-PROVIDE ( __ctzdi2 = 0x4000ca64 );
-PROVIDE ( __ctzsi2 = 0x4000c7f0 );
 PROVIDE ( _data_end_rom = 0x4000d5c8 );
 PROVIDE ( _data_end_btdm_rom = 0x4000d4f8 );
 PROVIDE ( _data_start_rom = 0x4000d4f8 );
@@ -342,11 +230,11 @@ PROVIDE ( _bss_start_btdm = 0x3ffb8000);
 PROVIDE ( _bss_end_btdm = 0x3ffbff70);
 PROVIDE ( _daylight = 0x3ffae0a4 );
 PROVIDE ( dbg_default_handler = 0x3ff97218 );
+PROVIDE ( dbg_default_state = 0x3ff97220 );
 PROVIDE ( dbg_state = 0x3ffb8d5d );
 PROVIDE ( DebugE256PublicKey_x = 0x3ff97428 );
 PROVIDE ( DebugE256PublicKey_y = 0x3ff97408 );
 PROVIDE ( DebugE256SecretKey = 0x3ff973e8 );
-PROVIDE ( _DebugExceptionVector = 0x40000280 );
 PROVIDE ( debug_timer = 0x3ffe042c );
 PROVIDE ( debug_timerfn = 0x3ffe0430 );
 PROVIDE ( dh_group14_generator = 0x3ff9ac60 );
@@ -365,178 +253,28 @@ PROVIDE ( dh_group2_generator = 0x3ff9ada2 );
 PROVIDE ( dh_group2_prime = 0x3ff9ad22 );
 PROVIDE ( dh_group5_generator = 0x3ff9ad21 );
 PROVIDE ( dh_group5_prime = 0x3ff9ac61 );
-PROVIDE ( div = 0x40056348 );
-PROVIDE ( __divdc3 = 0x40064460 );
-PROVIDE ( __divdf3 = 0x40002954 );
-PROVIDE ( __divdi3 = 0x4000ca84 );
-PROVIDE ( __divsc3 = 0x40064200 );
-PROVIDE ( __divsf3 = 0x4000234c );
-PROVIDE ( __divsi3 = 0x4000c7b8 );
-PROVIDE ( _DoubleExceptionVector = 0x400003c0 );
-PROVIDE ( dummy_len_plus = 0x3ffae290 );
-PROVIDE ( __dummy_lock = 0x4000c728 );
-PROVIDE ( __dummy_lock_try = 0x4000c730 );
+PROVIDE ( g_rom_spiflash_dummy_len_plus = 0x3ffae290 );
 PROVIDE ( ecc_env = 0x3ffb8d60 );
 PROVIDE ( ecc_Jacobian_InfinityPoint256 = 0x3ff972e8 );
 PROVIDE ( em_buf_env = 0x3ffb8d74 );
 PROVIDE ( environ = 0x3ffae0b4 );
-PROVIDE ( __env_lock = 0x40001fd4 );
-PROVIDE ( __env_unlock = 0x40001fe0 );
-PROVIDE ( __eqdf2 = 0x400636a8 );
-PROVIDE ( __eqsf2 = 0x40063374 );
 PROVIDE ( esp_crc8 = 0x4005d144 );
 PROVIDE ( _etext = 0x4000d66c );
-PROVIDE ( ets_aes_crypt = 0x4005c9b8 );
-PROVIDE ( ets_aes_disable = 0x4005c8f8 );
-PROVIDE ( ets_aes_enable = 0x4005c8cc );
-PROVIDE ( ets_aes_set_endian = 0x4005c928 );
-PROVIDE ( ets_aes_setkey_dec = 0x4005c994 );
-PROVIDE ( ets_aes_setkey_enc = 0x4005c97c );
-PROVIDE ( ets_bigint_disable = 0x4005c4e0 );
-PROVIDE ( ets_bigint_enable = 0x4005c498 );
-PROVIDE ( ets_bigint_mod_mult_getz = 0x4005c818 );
-PROVIDE ( ets_bigint_mod_mult_prepare = 0x4005c7b4 );
-PROVIDE ( ets_bigint_mod_power_getz = 0x4005c614 );
-PROVIDE ( ets_bigint_mod_power_prepare = 0x4005c54c );
-PROVIDE ( ets_bigint_montgomery_mult_getz = 0x4005c7a4 );
-PROVIDE ( ets_bigint_montgomery_mult_prepare = 0x4005c6fc );
-PROVIDE ( ets_bigint_mult_getz = 0x4005c6e8 );
-PROVIDE ( ets_bigint_mult_prepare = 0x4005c630 );
-PROVIDE ( ets_bigint_wait_finish = 0x4005c520 );
-PROVIDE ( ets_delay_us = 0x40008534 );
-PROVIDE ( ets_efuse_get_8M_clock = 0x40008710 );
-PROVIDE ( ets_efuse_get_spiconfig = 0x40008658 );
-PROVIDE ( ets_efuse_program_op = 0x40008628 );
-PROVIDE ( ets_efuse_read_op = 0x40008600 );
-PROVIDE ( ets_get_cpu_frequency = 0x4000855c );
-PROVIDE ( ets_get_detected_xtal_freq = 0x40008588 );
-PROVIDE ( ets_get_xtal_scale = 0x4000856c );
-PROVIDE ( ets_install_putc1 = 0x40007d18 );
-PROVIDE ( ets_install_putc2 = 0x40007d38 );
-PROVIDE ( ets_install_uart_printf = 0x40007d28 );
-PROVIDE ( ets_post = 0x4000673c );
-PROVIDE ( ets_printf = 0x40007d54 );
 PROVIDE ( ets_readySet_ = 0x3ffe01f0 );
-PROVIDE ( ets_run = 0x400066bc );
-PROVIDE ( ets_secure_boot_check = 0x4005cb40 );
-PROVIDE ( ets_secure_boot_check_finish = 0x4005cc04 );
-PROVIDE ( ets_secure_boot_check_start = 0x4005cbcc );
-PROVIDE ( ets_secure_boot_finish = 0x4005ca84 );
-PROVIDE ( ets_secure_boot_hash = 0x4005cad4 );
-PROVIDE ( ets_secure_boot_obtain = 0x4005cb14 );
-PROVIDE ( ets_secure_boot_rd_abstract = 0x4005cba8 );
-PROVIDE ( ets_secure_boot_rd_iv = 0x4005cb84 );
-PROVIDE ( ets_secure_boot_start = 0x4005ca34 );
-PROVIDE ( ets_set_appcpu_boot_addr = 0x4000689c );
-PROVIDE ( ets_set_idle_cb = 0x40006674 );
-PROVIDE ( ets_set_startup_callback = 0x4000688c );
-PROVIDE ( ets_set_user_start = 0x4000687c );
-PROVIDE ( ets_sha_disable = 0x4005c0a8 );
-PROVIDE ( ets_sha_enable = 0x4005c07c );
-PROVIDE ( ets_sha_finish = 0x4005c104 );
-PROVIDE ( ets_sha_init = 0x4005c0d4 );
-PROVIDE ( ets_sha_update = 0x4005c2a0 );
 PROVIDE ( ets_startup_callback = 0x3ffe0404 );
-PROVIDE ( ets_task = 0x40006688 );
-PROVIDE ( ets_timer_arm = 0x40008368 );
-PROVIDE ( ets_timer_arm_us = 0x400083ac );
-PROVIDE ( ets_timer_disarm = 0x400083ec );
-PROVIDE ( ets_timer_done = 0x40008428 );
-PROVIDE ( ets_timer_handler_isr = 0x40008454 );
-PROVIDE ( ets_timer_init = 0x400084e8 );
-PROVIDE ( ets_timer_setfn = 0x40008350 );
-PROVIDE ( ets_unpack_flash_code = 0x40007018 );
-PROVIDE ( ets_unpack_flash_code_legacy = 0x4000694c );
-PROVIDE ( ets_update_cpu_frequency_rom = 0x40008550 ); /* Updates g_ticks_per_us on the current CPU only; not on the other core */
-PROVIDE ( ets_waiti0 = 0x400067d8 );
+PROVIDE ( rwip_coex_cfg = 0x3ff9914c );
+PROVIDE ( rwip_priority = 0x3ff99159 );
 PROVIDE ( exc_cause_table = 0x3ff991d0 );
 PROVIDE ( _exit_r = 0x4000bd28 );
-PROVIDE ( __extendsfdf2 = 0x40002c34 );
-PROVIDE ( fclose = 0x400020ac );
-PROVIDE ( _fclose_r = 0x40001fec );
-PROVIDE ( fflush = 0x40059394 );
-PROVIDE ( _fflush_r = 0x40059320 );
-PROVIDE ( __ffsdi2 = 0x4000ca2c );
-PROVIDE ( __ffssi2 = 0x4000c804 );
-PROVIDE ( FilePacketSendDeflatedReqMsgProc = 0x40008b24 );
-PROVIDE ( FilePacketSendReqMsgProc = 0x40008860 );
-PROVIDE ( _findenv_r = 0x40001f44 );
-PROVIDE ( __fixdfdi = 0x40002ac4 );
-PROVIDE ( __fixdfsi = 0x40002a78 );
-PROVIDE ( __fixsfdi = 0x4000244c );
-PROVIDE ( __fixsfsi = 0x4000240c );
-PROVIDE ( __fixunsdfsi = 0x40002b30 );
-PROVIDE ( __fixunssfdi = 0x40002504 );
-PROVIDE ( __fixunssfsi = 0x400024ac );
-PROVIDE ( FlashDwnLdDeflatedStartMsgProc = 0x40008ad8 );
-PROVIDE ( FlashDwnLdParamCfgMsgProc = 0x4000891c );
-PROVIDE ( FlashDwnLdStartMsgProc = 0x40008820 );
-PROVIDE ( FlashDwnLdStopDeflatedReqMsgProc = 0x40008c18 );
-PROVIDE ( FlashDwnLdStopReqMsgProc = 0x400088ec );
-PROVIDE ( __floatdidf = 0x4000c988 );
-PROVIDE ( __floatdisf = 0x4000c8c0 );
-PROVIDE ( __floatsidf = 0x4000c944 );
-PROVIDE ( __floatsisf = 0x4000c870 );
-PROVIDE ( __floatundidf = 0x4000c978 );
-PROVIDE ( __floatundisf = 0x4000c8b0 );
-PROVIDE ( __floatunsidf = 0x4000c938 );
-PROVIDE ( __floatunsisf = 0x4000c864 );
-PROVIDE ( __fp_lock_all = 0x40001f1c );
-PROVIDE ( __fp_unlock_all = 0x40001f30 );
-PROVIDE ( fputwc = 0x40058ea8 );
-PROVIDE ( __fputwc = 0x40058da0 );
-PROVIDE ( _fputwc_r = 0x40058e4c );
 PROVIDE ( free = 0x4000beb8 );
-PROVIDE ( _free_r = 0x4000bbcc );
 PROVIDE ( _fstat_r = 0x4000bccc );
-PROVIDE ( _fwalk = 0x4000c738 );
-PROVIDE ( _fwalk_reent = 0x4000c770 );
 PROVIDE ( __gcc_bcmp = 0x40064a70 );
-PROVIDE ( __gedf2 = 0x40063768 );
-PROVIDE ( _GeneralException = 0x40000e14 );
-PROVIDE ( __gesf2 = 0x4006340c );
-PROVIDE ( __get_current_time_locale = 0x40001834 );
-PROVIDE ( _getenv_r = 0x40001fbc );
-PROVIDE ( _getpid_r = 0x4000bcfc );
-PROVIDE ( __getreent = 0x4000be8c );
-PROVIDE ( _gettimeofday_r = 0x4000bc58 );
-PROVIDE ( __gettzinfo = 0x40001fcc );
-PROVIDE ( GetUartDevice = 0x40009598 );
 PROVIDE ( GF_Jacobian_Point_Addition256 = 0x400163a4 );
 PROVIDE ( GF_Jacobian_Point_Double256 = 0x40016260 );
 PROVIDE ( GF_Point_Jacobian_To_Affine256 = 0x40016b0c );
 PROVIDE ( _global_impure_ptr = 0x3ffae0b0 );
-PROVIDE ( gmtime = 0x40059848 );
-PROVIDE ( gmtime_r = 0x40059868 );
 PROVIDE ( g_phyFuns_instance = 0x3ffae0c4 );
 PROVIDE ( g_rom_flashchip = 0x3ffae270 );
-PROVIDE ( gpio_init = 0x40009c20 );
-PROVIDE ( gpio_input_get = 0x40009b88 );
-PROVIDE ( gpio_input_get_high = 0x40009b9c );
-PROVIDE ( gpio_intr_ack = 0x40009dd4 );
-PROVIDE ( gpio_intr_ack_high = 0x40009e1c );
-PROVIDE ( gpio_intr_handler_register = 0x40009e6c );
-PROVIDE ( gpio_intr_pending = 0x40009cec );
-PROVIDE ( gpio_intr_pending_high = 0x40009cf8 );
-PROVIDE ( gpio_matrix_in = 0x40009edc );
-PROVIDE ( gpio_matrix_out = 0x40009f0c );
-PROVIDE ( gpio_output_set = 0x40009b24 );
-PROVIDE ( gpio_output_set_high = 0x40009b5c );
-PROVIDE ( gpio_pad_hold = 0x4000a734 );
-PROVIDE ( gpio_pad_pulldown = 0x4000a348 );
-PROVIDE ( gpio_pad_pullup = 0x4000a22c );
-PROVIDE ( gpio_pad_select_gpio = 0x40009fdc );
-PROVIDE ( gpio_pad_set_drv = 0x4000a11c );
-PROVIDE ( gpio_pad_unhold = 0x4000a484 );
-PROVIDE ( gpio_pending_mask = 0x3ffe0038 );
-PROVIDE ( gpio_pending_mask_high = 0x3ffe0044 );
-PROVIDE ( gpio_pin_intr_state_set = 0x40009d04 );
-PROVIDE ( gpio_pin_wakeup_disable = 0x40009eb0 );
-PROVIDE ( gpio_pin_wakeup_enable = 0x40009e7c );
-PROVIDE ( gpio_register_get = 0x40009cbc );
-PROVIDE ( gpio_register_set = 0x40009bbc );
-PROVIDE ( __gtdf2 = 0x400636dc );
-PROVIDE ( __gtsf2 = 0x400633a0 );
 PROVIDE ( gTxMsg = 0x3ffe0050 );
 PROVIDE ( hci_cmd_desc_root_tab = 0x3ff976d4 );
 PROVIDE ( hci_cmd_desc_tab_ctrl_bb = 0x3ff97b70 );
@@ -549,38 +287,16 @@ PROVIDE ( hci_cmd_desc_tab_testing = 0x3ff97a98 );
 PROVIDE ( hci_cmd_desc_tab_vs = 0x3ff97714 );
 PROVIDE ( hci_command_handler = 0x4004c928 );
 PROVIDE ( hci_env = 0x3ffb9350 );
+PROVIDE ( rwip_env = 0x3ffb8bcc );
 PROVIDE ( hci_evt_dbg_desc_tab = 0x3ff9750c );
 PROVIDE ( hci_evt_desc_tab = 0x3ff9751c );
 PROVIDE ( hci_evt_le_desc_tab = 0x3ff974b4 );
 PROVIDE ( hci_fc_env = 0x3ffb9340 );
-PROVIDE ( hmac_md5 = 0x4005d264 );
-PROVIDE ( hmac_md5_vector = 0x4005d17c );
-PROVIDE ( hmac_sha1 = 0x40060acc );
-PROVIDE ( hmac_sha1_vector = 0x400609e4 );
-PROVIDE ( hmac_sha256 = 0x40060d58 );
-PROVIDE ( hmac_sha256_vector = 0x40060c84 );
-PROVIDE ( intr_matrix_set = 0x4000681c );
-PROVIDE ( isalnum = 0x40000f04 );
-PROVIDE ( isalpha = 0x40000f18 );
-PROVIDE ( isascii = 0x4000c20c );
-PROVIDE ( _isatty_r = 0x40000ea0 );
-PROVIDE ( isblank = 0x40000f2c );
-PROVIDE ( iscntrl = 0x40000f50 );
-PROVIDE ( isdigit = 0x40000f64 );
-PROVIDE ( isgraph = 0x40000f94 );
-PROVIDE ( islower = 0x40000f78 );
-PROVIDE ( isprint = 0x40000fa8 );
-PROVIDE ( ispunct = 0x40000fc0 );
-PROVIDE ( isspace = 0x40000fd4 );
-PROVIDE ( isupper = 0x40000fe8 );
-PROVIDE ( itoa = 0x400566b4 );
-PROVIDE ( __itoa = 0x40056678 );
 PROVIDE ( jd_decomp = 0x400613e8 );
 PROVIDE ( jd_prepare = 0x40060fa8 );
 PROVIDE ( ke_env = 0x3ffb93cc );
-PROVIDE ( _KernelExceptionVector = 0x40000300 );
-PROVIDE ( _kill_r = 0x4000bd10 );
-PROVIDE ( labs = 0x40056370 );
+PROVIDE ( ke_handler_search = 0x4001a430 );
+PROVIDE ( ke_task_env = 0x3ffb81d4 );
 PROVIDE ( lb_default_handler = 0x3ff982b8 );
 PROVIDE ( lb_default_state_tab_p_get = 0x4001c198 );
 PROVIDE ( lb_env = 0x3ffb9424 );
@@ -596,21 +312,9 @@ PROVIDE ( ld_acl_br_types = 0x3ff98a36 );
 PROVIDE ( ld_acl_edr_sizes = 0x3ff98a14 );
 PROVIDE ( ld_acl_edr_types = 0x3ff98a22 );
 PROVIDE ( ld_env = 0x3ffb9510 );
-PROVIDE ( ldiv = 0x40056378 );
 PROVIDE ( ld_pcm_settings_dft = 0x3ff98a0c );
 PROVIDE ( ld_sched_params = 0x3ffb96c0 );
 PROVIDE ( ld_sync_train_channels = 0x3ff98a3c );
-PROVIDE ( __ledf2 = 0x40063704 );
-PROVIDE ( __lesf2 = 0x400633c0 );
-PROVIDE ( _Level2FromVector = 0x40000954 );
-PROVIDE ( _Level2Vector = 0x40000180 );
-PROVIDE ( _Level3FromVector = 0x40000a28 );
-PROVIDE ( _Level3Vector = 0x400001c0 );
-PROVIDE ( _Level4FromVector = 0x40000af8 );
-PROVIDE ( _Level4Vector = 0x40000200 );
-PROVIDE ( _Level5FromVector = 0x40000c68 );
-PROVIDE ( _Level5Vector = 0x40000240 );
-PROVIDE ( _LevelOneInterrupt = 0x40000835 );
 PROVIDE ( _link_r = 0x4000bc9c );
 PROVIDE ( llc_default_handler = 0x3ff98b3c );
 PROVIDE ( llc_default_state_tab_p_get = 0x40046058 );
@@ -623,9 +327,18 @@ PROVIDE ( llc_state = 0x3ffb96f8 );
 PROVIDE ( lldesc_build_chain = 0x4000a850 );
 PROVIDE ( lldesc_num2link = 0x4000a948 );
 PROVIDE ( lldesc_set_owner = 0x4000a974 );
+PROVIDE ( lld_evt_deferred_elt_push = 0x400466b4 );
+PROVIDE ( lld_evt_deferred_elt_pop = 0x400466dc );
+PROVIDE ( lld_evt_winsize_change = 0x40046730 );
+PROVIDE ( lld_evt_rxwin_compute = 0x400467c8 );
+PROVIDE ( lld_evt_slave_time_compute = 0x40046818 );
 PROVIDE ( lld_evt_env = 0x3ffb9704 );
+PROVIDE ( lld_evt_elt_wait_get = 0x400468e4 );
+PROVIDE ( lld_evt_get_next_free_slot = 0x4004692c );
 PROVIDE ( lld_pdu_adv_pk_desc_tab = 0x3ff98c70 );
 PROVIDE ( lld_pdu_llcp_pk_desc_tab = 0x3ff98b68 );
+PROVIDE ( lld_pdu_tx_flush_list = 0x4004a760 );
+PROVIDE ( lld_pdu_pack = 0x4004ab14 );
 PROVIDE ( LLM_AA_CT1 = 0x3ff98d8a );
 PROVIDE ( LLM_AA_CT2 = 0x3ff98d88 );
 PROVIDE ( llm_default_handler = 0x3ff98d80 );
@@ -646,94 +359,25 @@ PROVIDE ( lm_n_page_tab = 0x3ff990e8 );
 PROVIDE ( lmp_desc_tab = 0x3ff96e6c );
 PROVIDE ( lmp_ext_desc_tab = 0x3ff96d9c );
 PROVIDE ( lm_state = 0x3ffb9a1c );
-PROVIDE ( __locale_charset = 0x40059540 );
-PROVIDE ( __locale_cjk_lang = 0x40059558 );
-PROVIDE ( localeconv = 0x4005957c );
-PROVIDE ( _localeconv_r = 0x40059560 );
-PROVIDE ( __locale_mb_cur_max = 0x40059548 );
-PROVIDE ( __locale_msgcharset = 0x40059550 );
-PROVIDE ( localtime = 0x400595dc );
-PROVIDE ( localtime_r = 0x400595fc );
-PROVIDE ( _lock_acquire = 0x4000be14 );
-PROVIDE ( _lock_acquire_recursive = 0x4000be28 );
-PROVIDE ( _lock_close = 0x4000bdec );
-PROVIDE ( _lock_close_recursive = 0x4000be00 );
-PROVIDE ( _lock_init = 0x4000bdc4 );
-PROVIDE ( _lock_init_recursive = 0x4000bdd8 );
-PROVIDE ( _lock_release = 0x4000be64 );
-PROVIDE ( _lock_release_recursive = 0x4000be78 );
-PROVIDE ( _lock_try_acquire = 0x4000be3c );
-PROVIDE ( _lock_try_acquire_recursive = 0x4000be50 );
-PROVIDE ( longjmp = 0x400562cc );
 PROVIDE ( _lseek_r = 0x4000bd8c );
-PROVIDE ( __lshrdi3 = 0x4000c84c );
-PROVIDE ( __ltdf2 = 0x40063790 );
-PROVIDE ( __ltsf2 = 0x4006342c );
 PROVIDE ( malloc = 0x4000bea0 );
-PROVIDE ( _malloc_r = 0x4000bbb4 );
 PROVIDE ( maxSecretKey_256 = 0x3ff97448 );
 PROVIDE ( __mb_cur_max = 0x3ff96530 );
-PROVIDE ( MD5Final = 0x4005db1c );
-PROVIDE ( MD5Init = 0x4005da7c );
-PROVIDE ( MD5Update = 0x4005da9c );
-PROVIDE ( md5_vector = 0x4005db80 );
-PROVIDE ( memccpy = 0x4000c220 );
-PROVIDE ( memchr = 0x4000c244 );
-PROVIDE ( memcmp = 0x4000c260 );
-PROVIDE ( memcpy = 0x4000c2c8 );
-PROVIDE ( MemDwnLdStartMsgProc = 0x40008948 );
-PROVIDE ( MemDwnLdStopReqMsgProc = 0x400089dc );
-PROVIDE ( memmove = 0x4000c3c0 );
-PROVIDE ( MemPacketSendReqMsgProc = 0x40008978 );
-PROVIDE ( memrchr = 0x4000c400 );
-PROVIDE ( memset = 0x4000c44c );
-PROVIDE ( mktime = 0x4005a5e8 );
 PROVIDE ( mmu_init = 0x400095a4 );
-PROVIDE ( __moddi3 = 0x4000cd4c );
-PROVIDE ( __modsi3 = 0x4000c7c0 );
 PROVIDE ( __month_lengths = 0x3ff9609c );
-PROVIDE ( __muldc3 = 0x40063bf4 );
-PROVIDE ( __muldf3 = 0x4006358c );
-PROVIDE ( __muldi3 = 0x4000c9fc );
-PROVIDE ( __mulsc3 = 0x40063934 );
-PROVIDE ( __mulsf3 = 0x400632c8 );
-PROVIDE ( __mulsi3 = 0x4000c7b0 );
 PROVIDE ( MultiplyBigHexByUint32_256 = 0x40016214 );
 PROVIDE ( MultiplyBigHexModP256 = 0x400160b8 );
 PROVIDE ( MultiplyByU32ModP256 = 0x40015fdc );
 PROVIDE ( multofup = 0x4000ab8c );
-PROVIDE ( __mulvdi3 = 0x40002d78 );
-PROVIDE ( __mulvsi3 = 0x40002d60 );
 PROVIDE ( mz_adler32 = 0x4005edbc );
 PROVIDE ( mz_crc32 = 0x4005ee88 );
 PROVIDE ( mz_free = 0x4005eed4 );
-PROVIDE ( __nedf2 = 0x400636a8 );
-PROVIDE ( __negdf2 = 0x400634a0 );
-PROVIDE ( __negdi2 = 0x4000ca14 );
-PROVIDE ( __negsf2 = 0x400020c0 );
-PROVIDE ( __negvdi2 = 0x40002e98 );
-PROVIDE ( __negvsi2 = 0x40002e78 );
-PROVIDE ( __nesf2 = 0x40063374 );
-PROVIDE ( _NMIExceptionVector = 0x400002c0 );
 PROVIDE ( notEqual256 = 0x40015b04 );
-PROVIDE ( __nsau_data = 0x3ff96544 );
 PROVIDE ( one_bits = 0x3ff971f8 );
-PROVIDE ( open = 0x4000178c );
 PROVIDE ( _open_r = 0x4000bd54 );
-PROVIDE ( __paritysi2 = 0x40002f3c );
-PROVIDE ( pbkdf2_sha1 = 0x40060ba4 );
 PROVIDE ( phy_get_romfuncs = 0x40004100 );
-PROVIDE ( __popcountdi2 = 0x40002ef8 );
-PROVIDE ( __popcountsi2 = 0x40002ed0 );
-PROVIDE ( __popcount_tab = 0x3ff96544 );
-PROVIDE ( __powidf2 = 0x400638d4 );
-PROVIDE ( __powisf2 = 0x4006389c );
 PROVIDE ( _Pri_4_HandlerAddress = 0x3ffe0648 );
 PROVIDE ( _Pri_5_HandlerAddress = 0x3ffe064c );
-PROVIDE ( qsort = 0x40056424 );
-PROVIDE ( _raise_r = 0x4000bc70 );
-PROVIDE ( rand = 0x40001058 );
-PROVIDE ( rand_r = 0x400010d4 );
 PROVIDE ( r_btdm_option_data = 0x3ffae6e0 );
 PROVIDE ( r_bt_util_buf_acl_rx_alloc = 0x40010218 );
 PROVIDE ( r_bt_util_buf_acl_rx_free = 0x40010234 );
@@ -748,7 +392,6 @@ PROVIDE ( r_bt_util_buf_sync_rx_alloc = 0x40010468 );
 PROVIDE ( r_bt_util_buf_sync_rx_free = 0x4001049c );
 PROVIDE ( r_bt_util_buf_sync_tx_alloc = 0x400103ec );
 PROVIDE ( r_bt_util_buf_sync_tx_free = 0x40010428 );
-PROVIDE ( rc4_skip = 0x40060928 );
 PROVIDE ( r_co_bdaddr_compare = 0x40014324 );
 PROVIDE ( r_co_bytes_to_string = 0x400142e4 );
 PROVIDE ( r_co_list_check_size_available = 0x400142c4 );
@@ -766,7 +409,6 @@ PROVIDE ( r_co_list_push_front = 0x40013ff4 );
 PROVIDE ( r_co_list_size = 0x400142ac );
 PROVIDE ( r_co_nb_good_channels = 0x40014360 );
 PROVIDE ( r_co_slot_to_duration = 0x40014348 );
-PROVIDE ( RcvMsg = 0x4000954c );
 PROVIDE ( r_dbg_init = 0x40014394 );
 PROVIDE ( r_dbg_platform_reset_complete = 0x400143d0 );
 PROVIDE ( r_dbg_swdiag_init = 0x40014470 );
@@ -776,9 +418,11 @@ PROVIDE ( r_E1 = 0x400108e8 );
 PROVIDE ( r_E21 = 0x40010968 );
 PROVIDE ( r_E22 = 0x400109b4 );
 PROVIDE ( r_E3 = 0x40010a58 );
+PROVIDE ( lm_n192_mod_mul = 0x40011dc0 );
+PROVIDE ( lm_n192_mod_add = 0x40011e9c );
+PROVIDE ( lm_n192_mod_sub = 0x40011eec );
 PROVIDE ( r_ea_alarm_clear = 0x40015ab4 );
 PROVIDE ( r_ea_alarm_set = 0x40015a10 );
-PROVIDE ( read = 0x400017dc );
 PROVIDE ( _read_r = 0x4000bda8 );
 PROVIDE ( r_ea_elt_cancel = 0x400150d0 );
 PROVIDE ( r_ea_elt_create = 0x40015264 );
@@ -791,8 +435,9 @@ PROVIDE ( r_ea_interval_delete = 0x400155a8 );
 PROVIDE ( r_ea_interval_duration_req = 0x4001597c );
 PROVIDE ( r_ea_interval_insert = 0x4001557c );
 PROVIDE ( r_ea_interval_remove = 0x40015590 );
+PROVIDE ( ea_conflict_check = 0x40014e9c );
+PROVIDE ( ea_prog_timer = 0x40014f88 );
 PROVIDE ( realloc = 0x4000becc );
-PROVIDE ( _realloc_r = 0x4000bbe0 );
 PROVIDE ( r_ea_offset_req = 0x40015748 );
 PROVIDE ( r_ea_sleep_check = 0x40015928 );
 PROVIDE ( r_ea_sw_isr = 0x40015724 );
@@ -804,16 +449,14 @@ PROVIDE ( r_ecc_gen_new_public_key = 0x400170c0 );
 PROVIDE ( r_ecc_gen_new_secret_key = 0x400170e4 );
 PROVIDE ( r_ecc_get_debug_Keys = 0x40017224 );
 PROVIDE ( r_ecc_init = 0x40016dbc );
+PROVIDE ( ecc_point_multiplication_uint8_256 = 0x40016804);
 PROVIDE ( RecvBuff = 0x3ffe009c );
-PROVIDE ( recv_packet = 0x40009424 );
 PROVIDE ( r_em_buf_init = 0x4001729c );
 PROVIDE ( r_em_buf_rx_buff_addr_get = 0x400173e8 );
 PROVIDE ( r_em_buf_rx_free = 0x400173c4 );
 PROVIDE ( r_em_buf_tx_buff_addr_get = 0x40017404 );
 PROVIDE ( r_em_buf_tx_free = 0x4001741c );
 PROVIDE ( _rename_r = 0x4000bc28 );
-PROVIDE ( _ResetHandler = 0x40000450 );
-PROVIDE ( _ResetVector = 0x40000400 );
 PROVIDE ( r_F1_256 = 0x400133e4 );
 PROVIDE ( r_F2_256 = 0x40013568 );
 PROVIDE ( r_F3_256 = 0x40013664 );
@@ -1105,6 +748,117 @@ PROVIDE ( r_lc_util_get_offset_clke = 0x4002f538 );
 PROVIDE ( r_lc_util_get_offset_clkn = 0x4002f51c );
 PROVIDE ( r_lc_util_set_loc_trans_coll = 0x4002f500 );
 PROVIDE ( r_lc_version = 0x40020a30 );
+PROVIDE ( lc_set_encap_pdu_data_p192 = 0x4002e4c8 );
+PROVIDE ( lc_set_encap_pdu_data_p256 = 0x4002e454 );
+PROVIDE ( lm_get_auth_method = 0x40023420);
+PROVIDE ( lmp_accepted_ext_handler = 0x40027290 );
+PROVIDE ( lmp_not_accepted_ext_handler = 0x40029c54 );
+PROVIDE ( lmp_clk_adj_handler = 0x40027468 );
+PROVIDE ( lmp_clk_adj_ack_handler = 0x400274f4 );
+PROVIDE ( lm_get_auth_method = 0x40023420);
+PROVIDE ( lmp_accepted_ext_handler = 0x40027290 );
+PROVIDE ( lmp_not_accepted_ext_handler = 0x40029c54 );
+PROVIDE ( lmp_clk_adj_handler = 0x40027468 );
+PROVIDE ( lmp_clk_adj_ack_handler = 0x400274f4 );
+PROVIDE ( lmp_clk_adj_req_handler = 0x4002751c );
+PROVIDE ( lmp_feats_res_ext_handler = 0x4002cac4 );
+PROVIDE ( lmp_feats_req_ext_handler = 0x4002ccb0 );
+PROVIDE ( lmp_pkt_type_tbl_req_handler = 0x40027574 );
+PROVIDE ( lmp_esco_link_req_handler = 0x40027610 );
+PROVIDE ( lmp_rmv_esco_link_req_handler = 0x400276e8 );
+PROVIDE ( lmp_ch_class_req_handler = 0x40027730 );
+PROVIDE ( lmp_ch_class_handler = 0x4002ca18 );
+PROVIDE ( lmp_ssr_req_handler = 0x4002780c );
+PROVIDE ( lmp_ssr_res_handler = 0x40027900 );
+PROVIDE ( lmp_pause_enc_aes_req_handler = 0x400279a4 );
+PROVIDE ( lmp_pause_enc_req_handler = 0x4002df90 );
+PROVIDE ( lmp_resume_enc_req_handler = 0x4002e084 );
+PROVIDE ( lmp_num_comparison_fail_handler = 0x40027a74 );
+PROVIDE ( lmp_passkey_fail_handler = 0x40027aec );
+PROVIDE ( lmp_keypress_notif_handler = 0x4002c5c8 );
+PROVIDE ( lmp_pwr_ctrl_req_handler = 0x400263bc );
+PROVIDE ( lmp_pwr_ctrl_res_handler = 0x40026480 );
+PROVIDE ( lmp_auto_rate_handler = 0x40026548 );
+PROVIDE ( lmp_pref_rate_handler = 0x4002657c );
+PROVIDE ( lmp_name_req_handler = 0x40025050 );
+PROVIDE ( lmp_name_res_handler = 0x400250bc );
+PROVIDE ( lmp_not_accepted_handler = 0x400251d0 );
+PROVIDE ( lmp_accepted_handler = 0x4002e894 );
+PROVIDE ( lmp_clk_off_req_handler = 0x40025a44 );
+PROVIDE ( lmp_clk_off_res_handler = 0x40025ab8 );
+PROVIDE ( lmp_detach_handler = 0x40025b74 );
+PROVIDE ( lmp_tempkey_handler = 0x4002b6b0 );
+PROVIDE ( lmp_temprand_handler = 0x4002b74c );
+PROVIDE ( lmp_sres_handler = 0x4002b840 );
+PROVIDE ( lmp_aurand_handler = 0x4002bda0 );
+PROVIDE ( lmp_unitkey_handler = 0x4002c13c );
+PROVIDE ( lmp_combkey_handler = 0x4002c234 );
+PROVIDE ( lmp_inrand_handler = 0x4002c414 );
+PROVIDE ( lmp_oob_fail_handler = 0x40027b84 );
+PROVIDE ( lmp_ping_req_handler = 0x40027c08 );
+PROVIDE ( lmp_ping_res_handler = 0x40027c5c );
+PROVIDE ( lmp_enc_mode_req_handler = 0x40025c60 );
+PROVIDE ( lmp_enc_key_size_req_handler = 0x40025e54 );
+PROVIDE ( lmp_switch_req_handler = 0x40025f84 );
+PROVIDE ( lmp_start_enc_req_handler = 0x4002e124 );
+PROVIDE ( lmp_stop_enc_req_handler = 0x4002de30 );
+PROVIDE ( lmp_sniff_req_handler = 0x400260c8 );
+PROVIDE ( lmp_unsniff_req_handler = 0x400261e0 );
+PROVIDE ( lmp_incr_pwr_req_handler = 0x4002629c );
+PROVIDE ( lmp_decr_pwr_req_handler = 0x400262f8 );
+PROVIDE ( lmp_max_pwr_handler = 0x40026354 );
+PROVIDE ( lmp_min_pwr_handler = 0x40026388 );
+PROVIDE ( lmp_ver_req_handler = 0x400265f0 );
+PROVIDE ( lmp_ver_res_handler = 0x40026670 );
+PROVIDE ( lmp_qos_handler = 0x40026790 );
+PROVIDE ( lmp_qos_req_handler = 0x40026844 );
+PROVIDE ( lmp_sco_link_req_handler = 0x40026930 );
+PROVIDE ( lmp_rmv_sco_link_req_handler = 0x40026a10 );
+PROVIDE ( lmp_max_slot_handler = 0x40026a54 );
+PROVIDE ( lmp_max_slot_req_handler = 0x40026aac );
+PROVIDE ( lmp_timing_accu_req_handler = 0x40026b54 );
+PROVIDE ( lmp_timing_accu_res_handler = 0x40026bcc );
+PROVIDE ( lmp_setup_cmp_handler = 0x40026c84 );
+PROVIDE ( lmp_feats_res_handler = 0x4002b548 );
+PROVIDE ( lmp_feats_req_handler = 0x4002b620 );
+PROVIDE ( lmp_host_con_req_handler = 0x4002b3d8 );
+PROVIDE ( lmp_use_semi_perm_key_handler = 0x4002b4c4 );
+PROVIDE ( lmp_slot_off_handler = 0x40026cc8 );
+PROVIDE ( lmp_page_mode_req_handler = 0x40026d0c );
+PROVIDE ( lmp_page_scan_mode_req_handler = 0x40026d4c );
+PROVIDE ( lmp_supv_to_handler = 0x40026d94 );
+PROVIDE ( lmp_test_activate_handler = 0x40026e7c );
+PROVIDE ( lmp_test_ctrl_handler = 0x40026ee4 );
+PROVIDE ( lmp_enc_key_size_mask_req_handler = 0x40027038 );
+PROVIDE ( lmp_enc_key_size_mask_res_handler = 0x400270a4 );
+PROVIDE ( lmp_set_afh_handler = 0x4002b2e4 );
+PROVIDE ( lmp_encaps_hdr_handler = 0x40027120 );
+PROVIDE ( lmp_encaps_payl_handler = 0x4002e590 );
+PROVIDE ( lmp_sp_nb_handler = 0x4002acf0 );
+PROVIDE ( lmp_sp_cfm_handler = 0x4002b170 );
+PROVIDE ( lmp_dhkey_chk_handler = 0x4002ab48 );
+PROVIDE ( lmp_pause_enc_aes_req_handler = 0x400279a4 );
+PROVIDE ( lmp_io_cap_res_handler = 0x4002c670 );
+PROVIDE ( lmp_io_cap_req_handler = 0x4002c7a4 );
+PROVIDE ( lc_cmd_cmp_bd_addr_send = 0x4002cec4 );
+PROVIDE ( ld_acl_tx_packet_type_select = 0x4002fb40 );
+PROVIDE ( ld_acl_sched = 0x40033268 );
+PROVIDE ( ld_acl_sniff_sched = 0x4003340c );
+PROVIDE ( ld_acl_rx = 0x4003274c );
+PROVIDE ( ld_acl_tx = 0x4002ffdc );
+PROVIDE ( ld_acl_rx_sync = 0x4002fbec );
+PROVIDE ( ld_acl_rx_sync2 = 0x4002fd8c );
+PROVIDE ( ld_acl_rx_no_sync = 0x4002fe78 );
+PROVIDE ( ld_acl_clk_isr = 0x40030cf8 );
+PROVIDE ( ld_acl_rsw_frm_cbk = 0x40033bb0 );
+PROVIDE ( ld_sco_modify = 0x40031778 );
+PROVIDE ( lm_cmd_cmp_send = 0x40051838 );
+PROVIDE ( ld_sco_frm_cbk = 0x400349dc );
+PROVIDE ( ld_acl_sniff_frm_cbk = 0x4003482c );
+PROVIDE ( ld_inq_end = 0x4003ab48 );
+PROVIDE ( ld_inq_sched = 0x4003aba4 );
+PROVIDE ( ld_inq_frm_cbk = 0x4003ae4c );
+PROVIDE ( ld_pscan_frm_cbk = 0x4003ebe4 );
 PROVIDE ( r_ld_acl_active_hop_types_get = 0x40036e10 );
 PROVIDE ( r_ld_acl_afh_confirm = 0x40036d40 );
 PROVIDE ( r_ld_acl_afh_prepare = 0x40036c84 );
@@ -1149,6 +903,11 @@ PROVIDE ( r_ld_acl_timing_accuracy_set = 0x4003673c );
 PROVIDE ( r_ld_acl_t_poll_get = 0x40036024 );
 PROVIDE ( r_ld_acl_t_poll_set = 0x40036068 );
 PROVIDE ( r_ld_acl_tx_enc = 0x400362f8 );
+PROVIDE ( ld_acl_frm_cbk = 0x40034414 );
+PROVIDE ( ld_acl_rsw_end = 0x40032bc0 );
+PROVIDE ( ld_acl_end = 0x40033140 );
+PROVIDE ( ld_acl_resched = 0x40033814 );
+PROVIDE ( ld_acl_test_mode_update = 0x40032050 );
 PROVIDE ( r_ld_acl_unsniff = 0x400361e0 );
 PROVIDE ( r_ld_active_check = 0x4003cac4 );
 PROVIDE ( r_ld_afh_ch_assess_data_get = 0x4003caec );
@@ -1524,6 +1283,13 @@ PROVIDE ( r_lm_num_clk_adj_ack_pending_set = 0x4004f500 );
 PROVIDE ( r_lm_oob_f1 = 0x40012e54 );
 PROVIDE ( r_lm_pca_sscan_link_get = 0x4004f560 );
 PROVIDE ( r_lm_pca_sscan_link_set = 0x4004f550 );
+PROVIDE ( nvds_null_read = 0x400542a0 );
+PROVIDE ( nvds_null_write = 0x400542a8 );
+PROVIDE ( nvds_null_erase = 0x400542b0 );
+PROVIDE ( nvds_read = 0x400542c4 );
+PROVIDE ( nvds_write = 0x400542fc );
+PROVIDE ( nvds_erase = 0x40054334 );
+PROVIDE ( nvds_init_memory = 0x40054358 );
 PROVIDE ( r_lmp_pack = 0x4001135c );
 PROVIDE ( r_lmp_unpack = 0x4001149c );
 PROVIDE ( r_lm_read_features = 0x4004f0d8 );
@@ -1596,7 +1362,6 @@ PROVIDE ( rom_iq_est_disable = 0x40005590 );
 PROVIDE ( rom_iq_est_enable = 0x40005514 );
 PROVIDE ( rom_linear_to_db = 0x40005f64 );
 PROVIDE ( rom_loopback_mode_en = 0x400030f8 );
-PROVIDE ( rom_main = 0x400076c4 );
 PROVIDE ( rom_meas_tone_pwr_db = 0x40006004 );
 PROVIDE ( rom_mhz2ieee = 0x4000404c );
 PROVIDE ( rom_noise_floor_auto_set = 0x40003bdc );
@@ -1703,50 +1468,18 @@ PROVIDE ( r_rwip_wakeup_delay_set = 0x40055e4c );
 PROVIDE ( r_rwip_wakeup_end = 0x40055e18 );
 PROVIDE ( r_rwip_wlcoex_set = 0x40055f60 );
 PROVIDE ( r_SHA_256 = 0x40013a90 );
-PROVIDE ( rtc_boot_control = 0x4000821c );
-PROVIDE ( rtc_get_reset_reason = 0x400081d4 );
-PROVIDE ( rtc_get_wakeup_cause = 0x400081f4 );
-PROVIDE ( rtc_select_apb_bridge = 0x40008288 );
 PROVIDE ( rwip_coex_cfg = 0x3ff9914c );
 PROVIDE ( rwip_priority = 0x3ff99159 );
 PROVIDE ( rwip_rf = 0x3ffbdb28 );
 PROVIDE ( rwip_rf_p_get = 0x400558f4 );
 PROVIDE ( r_XorKey = 0x400112c0 );
-PROVIDE ( sbrk = 0x400017f4 );
-PROVIDE ( _sbrk_r = 0x4000bce4 );
-PROVIDE ( __sccl = 0x4000c498 );
-PROVIDE ( __sclose = 0x400011b8 );
-PROVIDE ( SelectSpiFunction = 0x40061f84 );
-PROVIDE ( SelectSpiQIO = 0x40061ddc );
-PROVIDE ( SendMsg = 0x40009384 );
-PROVIDE ( send_packet = 0x40009340 );
-PROVIDE ( __seofread = 0x40001148 );
-PROVIDE ( setjmp = 0x40056268 );
-PROVIDE ( setlocale = 0x40059568 );
-PROVIDE ( _setlocale_r = 0x4005950c );
-PROVIDE ( set_rtc_memory_crc = 0x40008208 );
-PROVIDE ( SetSpiDrvs = 0x40061e78 );
 PROVIDE ( __sf_fake_stderr = 0x3ff96458 );
 PROVIDE ( __sf_fake_stdin = 0x3ff96498 );
 PROVIDE ( __sf_fake_stdout = 0x3ff96478 );
-PROVIDE ( __sflush_r = 0x400591e0 );
-PROVIDE ( __sfmoreglue = 0x40001dc8 );
-PROVIDE ( __sfp = 0x40001e90 );
-PROVIDE ( __sfp_lock_acquire = 0x40001e08 );
-PROVIDE ( __sfp_lock_release = 0x40001e14 );
-PROVIDE ( __sfputs_r = 0x40057790 );
-PROVIDE ( __sfvwrite_r = 0x4005893c );
-PROVIDE ( sha1_prf = 0x40060ae8 );
-PROVIDE ( sha1_vector = 0x40060b64 );
-PROVIDE ( sha256_prf = 0x40060d70 );
-PROVIDE ( sha256_vector = 0x40060e08 );
 PROVIDE ( sha_blk_bits = 0x3ff99290 );
 PROVIDE ( sha_blk_bits_bytes = 0x3ff99288 );
 PROVIDE ( sha_blk_hash_bytes = 0x3ff9928c );
 PROVIDE ( sig_matrix = 0x3ffae293 );
-PROVIDE ( __sinit = 0x40001e38 );
-PROVIDE ( __sinit_lock_acquire = 0x40001e20 );
-PROVIDE ( __sinit_lock_release = 0x40001e2c );
 PROVIDE ( sip_after_tx_complete = 0x4000b358 );
 PROVIDE ( sip_alloc_to_host_evt = 0x4000ab9c );
 PROVIDE ( sip_get_ptr = 0x4000b34c );
@@ -1772,49 +1505,7 @@ PROVIDE ( slc_reattach = 0x4000b62c );
 PROVIDE ( slc_send_to_host_chain = 0x4000b6a0 );
 PROVIDE ( slc_set_host_io_max_window = 0x4000b89c );
 PROVIDE ( slc_to_host_chain_recycle = 0x4000b758 );
-PROVIDE ( __smakebuf_r = 0x40059108 );
-PROVIDE ( software_reset = 0x4000824c );
-PROVIDE ( software_reset_cpu = 0x40008264 );
 PROVIDE ( specialModP256 = 0x4001600c );
-PROVIDE ( spi_cache_sram_init = 0x400626e4 );
-PROVIDE ( SPIClkConfig = 0x40062bc8 );
-PROVIDE ( SPI_Common_Command = 0x4006246c );
-PROVIDE ( spi_dummy_len_fix = 0x40061d90 );
-PROVIDE ( SPI_Encrypt_Write = 0x40062e78 );
-PROVIDE ( SPIEraseArea = 0x400631ac );
-PROVIDE ( SPIEraseBlock = 0x40062c4c );
-PROVIDE ( SPIEraseChip = 0x40062c14 );
-PROVIDE ( SPIEraseSector = 0x40062ccc );
-PROVIDE ( spi_flash_attach = 0x40062a6c );
-/* NB: SPIUnlock @ 0x400628b0 has been replaced with an updated
-    version in the "spi_flash" component */
-PROVIDE ( SPILock = 0x400628f0 );
-PROVIDE ( SPIMasterReadModeCnfig = 0x40062b64 );
-PROVIDE ( spi_modes = 0x3ff99270 );
-PROVIDE ( SPIParamCfg = 0x40063238 );
-PROVIDE ( SPI_Prepare_Encrypt_Data = 0x40062e1c );
-PROVIDE ( SPIRead = 0x40062ed8 );
-PROVIDE ( SPIReadModeCnfig = 0x40062944 );
-/* This is static function, but can be used, not generated by script*/
-PROVIDE ( SPI_read_status = 0x4006226c );
-/* This is static function, but can be used, not generated by script*/
-PROVIDE ( SPI_read_status_high = 0x40062448 );
-PROVIDE ( SPI_user_command_read = 0x400621b0 );
-PROVIDE ( SPI_flashchip_data = 0x3ffae270 );
-PROVIDE ( SPIWrite = 0x40062d50 );
-/* This is static function, but can be used, not generated by script*/
-PROVIDE ( SPI_write_enable = 0x40062320 );
-PROVIDE ( SPI_Write_Encrypt_Disable = 0x40062e60 );
-PROVIDE ( SPI_Write_Encrypt_Enable = 0x40062df4 );
-/* This is static function, but can be used, not generated by script*/
-PROVIDE ( SPI_write_status = 0x400622f0 );
-PROVIDE ( srand = 0x40001004 );
-PROVIDE ( __sread = 0x40001118 );
-PROVIDE ( __srefill_r = 0x400593d4 );
-PROVIDE ( __sseek = 0x40001184 );
-PROVIDE ( __ssprint_r = 0x40056ff8 );
-PROVIDE ( __ssputs_r = 0x40056f2c );
-PROVIDE ( __ssrefill_r = 0x40057fec );
 PROVIDE ( __stack = 0x3ffe3f20 );
 PROVIDE ( __stack_app = 0x3ffe7e30 );
 PROVIDE ( _stack_sentry = 0x3ffe1320 );
@@ -1823,59 +1514,14 @@ PROVIDE ( _start = 0x40000704 );
 PROVIDE ( start_tb_console = 0x4005a980 );
 PROVIDE ( _stat_r = 0x4000bcb4 );
 PROVIDE ( _stext = 0x40000560 );
-PROVIDE ( strcasecmp = 0x400011cc );
-PROVIDE ( strcasestr = 0x40001210 );
-PROVIDE ( strcat = 0x4000c518 );
-PROVIDE ( strchr = 0x4000c53c );
-PROVIDE ( strcmp = 0x40001274 );
-PROVIDE ( strcoll = 0x40001398 );
-PROVIDE ( strcpy = 0x400013ac );
-PROVIDE ( strcspn = 0x4000c558 );
-PROVIDE ( strdup = 0x4000143c );
-PROVIDE ( _strdup_r = 0x40001450 );
-PROVIDE ( strftime = 0x40059ab4 );
-PROVIDE ( strlcat = 0x40001470 );
-PROVIDE ( strlcpy = 0x4000c584 );
-PROVIDE ( strlen = 0x400014c0 );
-PROVIDE ( strlwr = 0x40001524 );
-PROVIDE ( strncasecmp = 0x40001550 );
-PROVIDE ( strncat = 0x4000c5c4 );
-PROVIDE ( strncmp = 0x4000c5f4 );
-PROVIDE ( strncpy = 0x400015d4 );
-PROVIDE ( strndup = 0x400016b0 );
-PROVIDE ( _strndup_r = 0x400016c4 );
-PROVIDE ( strnlen = 0x4000c628 );
-PROVIDE ( strrchr = 0x40001708 );
-PROVIDE ( strsep = 0x40001734 );
-PROVIDE ( strspn = 0x4000c648 );
-PROVIDE ( strstr = 0x4000c674 );
-PROVIDE ( __strtok_r = 0x4000c6a8 );
-PROVIDE ( strtok_r = 0x4000c70c );
-PROVIDE ( strtol = 0x4005681c );
-PROVIDE ( _strtol_r = 0x40056714 );
-PROVIDE ( strtoul = 0x4005692c );
-PROVIDE ( _strtoul_r = 0x40056834 );
-PROVIDE ( strupr = 0x4000174c );
-PROVIDE ( __subdf3 = 0x400026e4 );
-PROVIDE ( __submore = 0x40058f3c );
-PROVIDE ( __subsf3 = 0x400021d0 );
 PROVIDE ( SubtractBigHex256 = 0x40015bcc );
 PROVIDE ( SubtractBigHexMod256 = 0x40015e8c );
 PROVIDE ( SubtractBigHexUint32_256 = 0x40015f8c );
 PROVIDE ( SubtractFromSelfBigHex256 = 0x40015c20 );
 PROVIDE ( SubtractFromSelfBigHexSign256 = 0x40015dc8 );
-PROVIDE ( __subvdi3 = 0x40002d20 );
-PROVIDE ( __subvsi3 = 0x40002cf8 );
-PROVIDE ( _sungetc_r = 0x40057f6c );
-PROVIDE ( __swbuf = 0x40058cb4 );
-PROVIDE ( __swbuf_r = 0x40058bec );
-PROVIDE ( __swrite = 0x40001150 );
-PROVIDE ( __swsetup_r = 0x40058cc8 );
 PROVIDE ( sw_to_hw = 0x3ffb8d40 );
-PROVIDE ( _SyscallException = 0x400007cf );
 PROVIDE ( syscall_table_ptr_app = 0x3ffae020 );
 PROVIDE ( syscall_table_ptr_pro = 0x3ffae024 );
-PROVIDE ( _system_r = 0x4000bc10 );
 PROVIDE ( tdefl_compress = 0x400600bc );
 PROVIDE ( tdefl_compress_buffer = 0x400607f4 );
 PROVIDE ( tdefl_compress_mem_to_mem = 0x40060900 );
@@ -1885,79 +1531,16 @@ PROVIDE ( tdefl_get_prev_return_status = 0x400608d0 );
 PROVIDE ( tdefl_init = 0x40060810 );
 PROVIDE ( tdefl_write_image_to_png_file_in_memory = 0x4006091c );
 PROVIDE ( tdefl_write_image_to_png_file_in_memory_ex = 0x40060910 );
-PROVIDE ( time = 0x40001844 );
-PROVIDE ( __time_load_locale = 0x4000183c );
-PROVIDE ( times = 0x40001808 );
-PROVIDE ( _times_r = 0x4000bc40 );
 PROVIDE ( _timezone = 0x3ffae0a0 );
 PROVIDE ( tinfl_decompress = 0x4005ef30 );
 PROVIDE ( tinfl_decompress_mem_to_callback = 0x40060090 );
 PROVIDE ( tinfl_decompress_mem_to_mem = 0x40060050 );
-PROVIDE ( toascii = 0x4000c720 );
-PROVIDE ( tolower = 0x40001868 );
-PROVIDE ( toupper = 0x40001884 );
-PROVIDE ( __truncdfsf2 = 0x40002b90 );
-PROVIDE ( __tzcalc_limits = 0x400018a0 );
-PROVIDE ( __tz_lock = 0x40001a04 );
 PROVIDE ( _tzname = 0x3ffae030 );
-PROVIDE ( tzset = 0x40001a1c );
-PROVIDE ( _tzset_r = 0x40001a28 );
-PROVIDE ( __tz_unlock = 0x40001a10 );
-PROVIDE ( uartAttach = 0x40008fd0 );
-PROVIDE ( uart_baudrate_detect = 0x40009034 );
-PROVIDE ( uart_buff_switch = 0x400093c0 );
-PROVIDE ( UartConnCheck = 0x40008738 );
-PROVIDE ( UartConnectProc = 0x40008a04 );
 PROVIDE ( UartDev = 0x3ffe019c );
-PROVIDE ( uart_div_modify = 0x400090cc );
-PROVIDE ( UartDwnLdProc = 0x40008ce8 );
-PROVIDE ( UartGetCmdLn = 0x40009564 );
-PROVIDE ( Uart_Init = 0x40009120 );
-PROVIDE ( UartRegReadProc = 0x40008a58 );
-PROVIDE ( UartRegWriteProc = 0x40008a14 );
-PROVIDE ( uart_rx_intr_handler = 0x40008f4c );
-PROVIDE ( uart_rx_one_char = 0x400092d0 );
-PROVIDE ( uart_rx_one_char_block = 0x400092a4 );
-PROVIDE ( uart_rx_readbuff = 0x40009394 );
-PROVIDE ( UartRxString = 0x400092fc );
-PROVIDE ( UartSetBaudProc = 0x40008aac );
-PROVIDE ( UartSpiAttachProc = 0x40008a6c );
-PROVIDE ( UartSpiReadProc = 0x40008a80 );
-PROVIDE ( uart_tx_flush = 0x40009258 );
-PROVIDE ( uart_tx_one_char = 0x40009200 );
-PROVIDE ( uart_tx_one_char2 = 0x4000922c );
-PROVIDE ( uart_tx_switch = 0x40009028 );
-PROVIDE ( uart_tx_wait_idle = 0x40009278 );
-PROVIDE ( __ucmpdi2 = 0x40063840 );
-PROVIDE ( __udivdi3 = 0x4000cff8 );
-PROVIDE ( __udivmoddi4 = 0x40064ab0 );
-PROVIDE ( __udivsi3 = 0x4000c7c8 );
-PROVIDE ( __udiv_w_sdiv = 0x40064aa8 );
-PROVIDE ( __umoddi3 = 0x4000d280 );
-PROVIDE ( __umodsi3 = 0x4000c7d0 );
-PROVIDE ( __umulsidi3 = 0x4000c7d8 );
-PROVIDE ( ungetc = 0x400590f4 );
-PROVIDE ( _ungetc_r = 0x40058fa0 );
 PROVIDE ( _unlink_r = 0x4000bc84 );
-PROVIDE ( __unorddf2 = 0x400637f4 );
-PROVIDE ( __unordsf2 = 0x40063478 );
 PROVIDE ( user_code_start = 0x3ffe0400 );
-PROVIDE ( _UserExceptionVector = 0x40000340 );
-PROVIDE ( utoa = 0x40056258 );
-PROVIDE ( __utoa = 0x400561f0 );
-PROVIDE ( VerifyFlashMd5Proc = 0x40008c44 );
 PROVIDE ( veryBigHexP256 = 0x3ff9736c );
-PROVIDE ( wcrtomb = 0x40058920 );
-PROVIDE ( _wcrtomb_r = 0x400588d8 );
 PROVIDE ( __wctomb = 0x3ff96540 );
-PROVIDE ( _wctomb_r = 0x40058f14 );
-PROVIDE ( _WindowOverflow12 = 0x40000100 );
-PROVIDE ( _WindowOverflow4 = 0x40000000 );
-PROVIDE ( _WindowOverflow8 = 0x40000080 );
-PROVIDE ( _WindowUnderflow12 = 0x40000140 );
-PROVIDE ( _WindowUnderflow4 = 0x40000040 );
-PROVIDE ( _WindowUnderflow8 = 0x400000c0 );
-PROVIDE ( write = 0x4000181c );
 PROVIDE ( _write_r = 0x4000bd70 );
 PROVIDE ( xthal_bcopy = 0x4000c098 );
 PROVIDE ( xthal_copy123 = 0x4000c124 );
@@ -1972,12 +1555,53 @@ PROVIDE ( xthal_set_intclear = 0x4000c1ec );
 PROVIDE ( _xtos_set_intlevel = 0x4000bfdc );
 PROVIDE ( g_ticks_per_us_pro = 0x3ffe01e0 );
 PROVIDE ( g_ticks_per_us_app = 0x3ffe40f0 );
-/* 
-These functions are xtos-related (or call xtos-related functions) and do not play well 
+PROVIDE ( esp_rom_spiflash_config_param = 0x40063238 );
+PROVIDE ( esp_rom_spiflash_read_user_cmd = 0x400621b0 );
+PROVIDE ( esp_rom_spiflash_write_encrypted_disable = 0x40062e60 );
+PROVIDE ( esp_rom_spiflash_write_encrypted_enable = 0x40062df4 );
+PROVIDE ( esp_rom_spiflash_prepare_encrypted_data = 0x40062e1c );
+PROVIDE ( esp_rom_spiflash_select_qio_pins = 0x40061ddc );
+PROVIDE ( esp_rom_spiflash_attach = 0x40062a6c );
+PROVIDE ( esp_rom_spiflash_config_clk = 0x40062bc8 );
+PROVIDE ( g_rom_spiflash_chip = 0x3ffae270 );
+
+PROVIDE ( hci_le_rd_rem_used_feats_cmd_handler = 0x400417b4 );
+PROVIDE ( llcp_length_req_handler = 0x40043808 );
+PROVIDE ( llcp_unknown_rsp_handler = 0x40043ba8 );
+PROVIDE ( llcp_channel_map_req_handler = 0x4004291c );
+PROVIDE ( llcp_con_up_req_handler = 0x400426f0 );
+
+/*
+These functions are xtos-related (or call xtos-related functions) and do not play well
 with multicore FreeRTOS. Where needed, we provide alternatives that are multicore
-compatible.
+compatible. These functions also use a chunk of static RAM, by not using them we can
+allocate that RAM for general use.
 */
 /*
+PROVIDE ( _DebugExceptionVector = 0x40000280 );
+PROVIDE ( _DoubleExceptionVector = 0x400003c0 );
+PROVIDE ( _KernelExceptionVector = 0x40000300 );
+PROVIDE ( _GeneralException = 0x40000e14 );
+PROVIDE ( _ResetHandler = 0x40000450 );
+PROVIDE ( _ResetVector = 0x40000400 );
+PROVIDE ( _UserExceptionVector = 0x40000340 );
+PROVIDE ( _NMIExceptionVector = 0x400002c0 );
+PROVIDE ( _WindowOverflow12 = 0x40000100 );
+PROVIDE ( _WindowOverflow4 = 0x40000000 );
+PROVIDE ( _WindowOverflow8 = 0x40000080 );
+PROVIDE ( _WindowUnderflow12 = 0x40000140 );
+PROVIDE ( _WindowUnderflow4 = 0x40000040 );
+PROVIDE ( _WindowUnderflow8 = 0x400000c0 );
+PROVIDE ( _Level2FromVector = 0x40000954 );
+PROVIDE ( _Level3FromVector = 0x40000a28 );
+PROVIDE ( _Level4FromVector = 0x40000af8 );
+PROVIDE ( _Level5FromVector = 0x40000c68 );
+PROVIDE ( _Level2Vector = 0x40000180 );
+PROVIDE ( _Level3Vector = 0x400001c0 );
+PROVIDE ( _Level4Vector = 0x40000200 );
+PROVIDE ( _Level5Vector = 0x40000240 );
+PROVIDE ( _LevelOneInterrupt = 0x40000835 );
+PROVIDE ( _SyscallException = 0x400007cf );
 PROVIDE ( _xtos_alloca_handler = 0x40000010 );
 PROVIDE ( _xtos_cause3_handler = 0x40000dd8 );
 PROVIDE ( _xtos_c_handler_table = 0x3ffe0548 );
@@ -2003,14 +1627,161 @@ PROVIDE ( _xtos_unhandled_exception = 0x4000c024 );
 PROVIDE ( _xtos_unhandled_interrupt = 0x4000c01c );
 PROVIDE ( _xtos_vpri_enabled = 0x3ffe0654 );
 PROVIDE ( ets_intr_count = 0x3ffe03fc );
+*/
+
+/* These functions are part of the UART downloader but also contain general UART functions. */
+PROVIDE ( FilePacketSendDeflatedReqMsgProc = 0x40008b24 );
+PROVIDE ( FilePacketSendReqMsgProc = 0x40008860 );
+PROVIDE ( FlashDwnLdDeflatedStartMsgProc = 0x40008ad8 );
+PROVIDE ( FlashDwnLdParamCfgMsgProc = 0x4000891c );
+PROVIDE ( FlashDwnLdStartMsgProc = 0x40008820 );
+PROVIDE ( FlashDwnLdStopDeflatedReqMsgProc = 0x40008c18 );
+PROVIDE ( FlashDwnLdStopReqMsgProc = 0x400088ec );
+PROVIDE ( MemDwnLdStartMsgProc = 0x40008948 );
+PROVIDE ( MemDwnLdStopReqMsgProc = 0x400089dc );
+PROVIDE ( MemPacketSendReqMsgProc = 0x40008978 );
+PROVIDE ( uart_baudrate_detect = 0x40009034 );
+PROVIDE ( uart_buff_switch = 0x400093c0 );
+PROVIDE ( UartConnCheck = 0x40008738 );
+PROVIDE ( UartConnectProc = 0x40008a04 );
+PROVIDE ( UartDwnLdProc = 0x40008ce8 );
+PROVIDE ( UartRegReadProc = 0x40008a58 );
+PROVIDE ( UartRegWriteProc = 0x40008a14 );
+PROVIDE ( UartSetBaudProc = 0x40008aac );
+PROVIDE ( UartSpiAttachProc = 0x40008a6c );
+PROVIDE ( UartSpiReadProc = 0x40008a80 );
+PROVIDE ( VerifyFlashMd5Proc = 0x40008c44 );
+PROVIDE ( GetUartDevice = 0x40009598 );
+PROVIDE ( RcvMsg = 0x4000954c );
+PROVIDE ( SendMsg = 0x40009384 );
+PROVIDE ( UartGetCmdLn = 0x40009564 );
+PROVIDE ( UartRxString = 0x400092fc );
+PROVIDE ( Uart_Init = 0x40009120 );
+PROVIDE ( recv_packet = 0x40009424 );
+PROVIDE ( send_packet = 0x40009340 );
+PROVIDE ( uartAttach = 0x40008fd0 );
+PROVIDE ( uart_div_modify = 0x400090cc );
+PROVIDE ( uart_rx_intr_handler = 0x40008f4c );
+PROVIDE ( uart_rx_one_char = 0x400092d0 );
+PROVIDE ( uart_rx_one_char_block = 0x400092a4 );
+PROVIDE ( uart_rx_readbuff = 0x40009394 );
+PROVIDE ( uart_tx_flush = 0x40009258 );
+PROVIDE ( uart_tx_one_char = 0x40009200 );
+PROVIDE ( uart_tx_one_char2 = 0x4000922c );
+PROVIDE ( uart_tx_switch = 0x40009028 );
+
+
+/*
+These functions are part of the ROM GPIO driver. We do not use them; the provided esp-idf functions
+replace them and this way we can re-use the fixed RAM addresses these routines need.
+*/
+/* <-- So you don't read over it: This comment disables the next lines.
+PROVIDE ( gpio_init = 0x40009c20 );
+PROVIDE ( gpio_intr_ack = 0x40009dd4 );
+PROVIDE ( gpio_intr_ack_high = 0x40009e1c );
+PROVIDE ( gpio_intr_handler_register = 0x40009e6c );
+PROVIDE ( gpio_intr_pending = 0x40009cec );
+PROVIDE ( gpio_intr_pending_high = 0x40009cf8 );
+PROVIDE ( gpio_pending_mask = 0x3ffe0038 );
+PROVIDE ( gpio_pending_mask_high = 0x3ffe0044 );
+PROVIDE ( gpio_pin_intr_state_set = 0x40009d04 );
+PROVIDE ( gpio_pin_wakeup_disable = 0x40009eb0 );
+PROVIDE ( gpio_pin_wakeup_enable = 0x40009e7c );
+PROVIDE ( gpio_register_get = 0x40009cbc );
+PROVIDE ( gpio_register_set = 0x40009bbc );
+*/
+/* These are still part of that driver, but have been verified not to use static RAM, so they can be used. */
+PROVIDE ( gpio_output_set = 0x40009b24 );
+PROVIDE ( gpio_output_set_high = 0x40009b5c );
+PROVIDE ( gpio_input_get = 0x40009b88 );
+PROVIDE ( gpio_input_get_high = 0x40009b9c );
+PROVIDE ( gpio_matrix_in = 0x40009edc );
+PROVIDE ( gpio_matrix_out = 0x40009f0c );
+PROVIDE ( gpio_pad_select_gpio = 0x40009fdc );
+PROVIDE ( gpio_pad_set_drv = 0x4000a11c );
+PROVIDE ( gpio_pad_pulldown = 0x4000a348 );
+PROVIDE ( gpio_pad_pullup = 0x4000a22c );
+PROVIDE ( gpio_pad_hold = 0x4000a734 );
+PROVIDE ( gpio_pad_unhold = 0x4000a484 );
+
+/*
+These functions are part of the non-os kernel (etsc).
+*/
+PROVIDE ( ets_aes_crypt = 0x4005c9b8 );
+PROVIDE ( ets_aes_disable = 0x4005c8f8 );
+PROVIDE ( ets_aes_enable = 0x4005c8cc );
+PROVIDE ( ets_aes_set_endian = 0x4005c928 );
+PROVIDE ( ets_aes_setkey_dec = 0x4005c994 );
+PROVIDE ( ets_aes_setkey_enc = 0x4005c97c );
+PROVIDE ( ets_bigint_disable = 0x4005c4e0 );
+PROVIDE ( ets_bigint_enable = 0x4005c498 );
+PROVIDE ( ets_bigint_mod_mult_getz = 0x4005c818 );
+PROVIDE ( ets_bigint_mod_mult_prepare = 0x4005c7b4 );
+PROVIDE ( ets_bigint_mod_power_getz = 0x4005c614 );
+PROVIDE ( ets_bigint_mod_power_prepare = 0x4005c54c );
+PROVIDE ( ets_bigint_montgomery_mult_getz = 0x4005c7a4 );
+PROVIDE ( ets_bigint_montgomery_mult_prepare = 0x4005c6fc );
+PROVIDE ( ets_bigint_mult_getz = 0x4005c6e8 );
+PROVIDE ( ets_bigint_mult_prepare = 0x4005c630 );
+PROVIDE ( ets_bigint_wait_finish = 0x4005c520 );
+PROVIDE ( ets_post = 0x4000673c );
+PROVIDE ( ets_run = 0x400066bc );
+PROVIDE ( ets_set_idle_cb = 0x40006674 );
+PROVIDE ( ets_task = 0x40006688 );
+PROVIDE ( ets_efuse_get_8M_clock = 0x40008710 );
+PROVIDE ( ets_efuse_get_spiconfig = 0x40008658 );
+PROVIDE ( ets_efuse_program_op = 0x40008628 );
+PROVIDE ( ets_efuse_read_op = 0x40008600 );
 PROVIDE ( ets_intr_lock = 0x400067b0 );
 PROVIDE ( ets_intr_unlock = 0x400067c4 );
 PROVIDE ( ets_isr_attach = 0x400067ec );
-PROVIDE ( ets_isr_mask = 0x400067fc );
-PROVIDE ( ets_isr_unmask = 0x40006808 );
-*/
+PROVIDE ( ets_waiti0 = 0x400067d8 );
+PROVIDE ( intr_matrix_set = 0x4000681c );
+PROVIDE ( check_pos = 0x400068b8 );
+PROVIDE ( ets_set_appcpu_boot_addr = 0x4000689c );
+PROVIDE ( ets_set_startup_callback = 0x4000688c );
+PROVIDE ( ets_set_user_start = 0x4000687c );
+PROVIDE ( ets_unpack_flash_code = 0x40007018 );
+PROVIDE ( ets_unpack_flash_code_legacy = 0x4000694c );
+PROVIDE ( rom_main = 0x400076c4 );
+PROVIDE ( ets_write_char_uart = 0x40007cf8 );
+PROVIDE ( ets_install_putc1 = 0x40007d18 );
+PROVIDE ( ets_install_putc2 = 0x40007d38 );
+PROVIDE ( ets_install_uart_printf = 0x40007d28 );
+PROVIDE ( ets_printf = 0x40007d54 );
+PROVIDE ( rtc_boot_control = 0x4000821c );
+PROVIDE ( rtc_get_reset_reason = 0x400081d4 );
+PROVIDE ( rtc_get_wakeup_cause = 0x400081f4 );
+PROVIDE ( rtc_select_apb_bridge = 0x40008288 );
+PROVIDE ( set_rtc_memory_crc = 0x40008208 );
+PROVIDE ( software_reset = 0x4000824c );
+PROVIDE ( software_reset_cpu = 0x40008264 );
+PROVIDE ( ets_secure_boot_check = 0x4005cb40 );
+PROVIDE ( ets_secure_boot_check_finish = 0x4005cc04 );
+PROVIDE ( ets_secure_boot_check_start = 0x4005cbcc );
+PROVIDE ( ets_secure_boot_finish = 0x4005ca84 );
+PROVIDE ( ets_secure_boot_hash = 0x4005cad4 );
+PROVIDE ( ets_secure_boot_obtain = 0x4005cb14 );
+PROVIDE ( ets_secure_boot_rd_abstract = 0x4005cba8 );
+PROVIDE ( ets_secure_boot_rd_iv = 0x4005cb84 );
+PROVIDE ( ets_secure_boot_start = 0x4005ca34 );
+PROVIDE ( ets_sha_disable = 0x4005c0a8 );
+PROVIDE ( ets_sha_enable = 0x4005c07c );
+PROVIDE ( ets_sha_finish = 0x4005c104 );
+PROVIDE ( ets_sha_init = 0x4005c0d4 );
+PROVIDE ( ets_sha_update = 0x4005c2a0 );
+PROVIDE ( ets_delay_us = 0x40008534 );
+PROVIDE ( ets_get_cpu_frequency = 0x4000855c );
+PROVIDE ( ets_get_detected_xtal_freq = 0x40008588 );
+PROVIDE ( ets_get_xtal_scale = 0x4000856c );
+PROVIDE ( ets_update_cpu_frequency_rom = 0x40008550 );  /* Updates g_ticks_per_us on the current CPU only; not on the other core */
+
 /* Following are static data, but can be used, not generated by script <<<<< btdm data */
+PROVIDE ( hci_tl_env = 0x3ffb8154 );
 PROVIDE ( ld_acl_env = 0x3ffb8258 );
+PROVIDE ( ea_env = 0x3ffb80ec );
+PROVIDE ( lc_sco_data_path_config = 0x3ffb81f8 );
+PROVIDE ( lc_sco_env = 0x3ffb81fc );
 PROVIDE ( ld_active_ch_map = 0x3ffb8334 );
 PROVIDE ( ld_bcst_acl_env = 0x3ffb8274 );
 PROVIDE ( ld_csb_rx_env = 0x3ffb8278 );
@@ -2027,5 +1798,484 @@ PROVIDE ( ld_sched_params = 0x3ffb96c0 );
 PROVIDE ( ld_sco_env = 0x3ffb824c );
 PROVIDE ( ld_sscan_env = 0x3ffb832c );
 PROVIDE ( ld_strain_env = 0x3ffb8330 );
+PROVIDE ( LM_Sniff = 0x3ffb8230 );
+PROVIDE ( LM_SniffSubRate = 0x3ffb8214 );
+PROVIDE ( prbs_64bytes = 0x3ff98992 );
+PROVIDE ( nvds_env = 0x3ffb8364 );
+PROVIDE ( nvds_magic_number = 0x3ff9912a );
+PROVIDE ( TASK_DESC_LLD = 0x3ff98b58 );
 /* Above are static data, but can be used, not generated by script >>>>> btdm data */
 
+__absvdi2 = 0x4006387c;
+__absvsi2 = 0x40063868;
+__adddf3 = 0x40002590;
+__addsf3 = 0x400020e8;
+__addvdi3 = 0x40002cbc;
+__addvsi3 = 0x40002c98;
+__ashldi3 = 0x4000c818;
+__ashrdi3 = 0x4000c830;
+__bswapdi2 = 0x40064b08;
+__bswapsi2 = 0x40064ae0;
+__clrsbdi2 = 0x40064b7c;
+__clrsbsi2 = 0x40064b64;
+__clzdi2 = 0x4000ca50;
+__clzsi2 = 0x4000c7e8;
+__cmpdi2 = 0x40063820;
+__ctzdi2 = 0x4000ca64;
+__ctzsi2 = 0x4000c7f0;
+__divdc3 = 0x400645a4;
+__divdf3 = 0x40002954;
+__divdi3 = 0x4000ca84;
+__divsc3 = 0x4006429c;
+__divsf3 = 0x4000234c;
+__divsi3 = 0x4000c7b8;
+__eqdf2 = 0x400636a8;
+__eqsf2 = 0x40063374;
+__extendsfdf2 = 0x40002c34;
+__ffsdi2 = 0x4000ca2c;
+__ffssi2 = 0x4000c804;
+__fixdfdi = 0x40002ac4;
+__fixdfsi = 0x40002a78;
+__fixsfdi = 0x4000244c;
+__fixsfsi = 0x4000240c;
+__fixunsdfsi = 0x40002b30;
+__fixunssfdi = 0x40002504;
+__fixunssfsi = 0x400024ac;
+__floatdidf = 0x4000c988;
+__floatdisf = 0x4000c8c0;
+__floatsidf = 0x4000c944;
+__floatsisf = 0x4000c870;
+__floatundidf = 0x4000c978;
+__floatundisf = 0x4000c8b0;
+__floatunsidf = 0x4000c938;
+__floatunsisf = 0x4000c864;
+__gedf2 = 0x40063768;
+__gesf2 = 0x4006340c;
+__gtdf2 = 0x400636dc;
+__gtsf2 = 0x400633a0;
+__ledf2 = 0x40063704;
+__lesf2 = 0x400633c0;
+__lshrdi3 = 0x4000c84c;
+__ltdf2 = 0x40063790;
+__ltsf2 = 0x4006342c;
+__moddi3 = 0x4000cd4c;
+__modsi3 = 0x4000c7c0;
+__muldc3 = 0x40063c90;
+__muldf3 = 0x4006358c;
+__muldi3 = 0x4000c9fc;
+__mulsc3 = 0x40063944;
+__mulsf3 = 0x400632c8;
+__mulsi3 = 0x4000c7b0;
+__mulvdi3 = 0x40002d78;
+__mulvsi3 = 0x40002d60;
+__nedf2 = 0x400636a8;
+__negdf2 = 0x400634a0;
+__negdi2 = 0x4000ca14;
+__negsf2 = 0x400020c0;
+__negvdi2 = 0x40002e98;
+__negvsi2 = 0x40002e78;
+__nesf2 = 0x40063374;
+__nsau_data = 0x3ff96544;
+__paritysi2 = 0x40002f3c;
+__popcount_tab = 0x3ff96544;
+__popcountdi2 = 0x40002ef8;
+__popcountsi2 = 0x40002ed0;
+__powidf2 = 0x400638e4;
+__powisf2 = 0x4006389c;
+__subdf3 = 0x400026e4;
+__subsf3 = 0x400021d0;
+__subvdi3 = 0x40002d20;
+__subvsi3 = 0x40002cf8;
+__truncdfsf2 = 0x40002b90;
+__ucmpdi2 = 0x40063840;
+__udiv_w_sdiv = 0x40064bec;
+__udivdi3 = 0x4000cff8;
+__udivmoddi4 = 0x40064bf4;
+__udivsi3 = 0x4000c7c8;
+__umoddi3 = 0x4000d280;
+__umodsi3 = 0x4000c7d0;
+__umulsidi3 = 0x4000c7d8;
+__unorddf2 = 0x400637f4;
+__unordsf2 = 0x40063478;
+
+/*
+	Address table for printf/scanf family of functions in ESP32 ROM.
+	These functions are compiled with newlib "nano" format option.
+	As such, they don's support 64-bit integer formats.
+	Floating point formats are supported by setting _printf_float and
+	_scanf_float entries in syscall table. This is done automatically
+	by startup code.
+
+	Generated for ROM with MD5sum:
+	ab8282ae908fe9e7a63fb2a4ac2df013  eagle.pro.rom.out
+*/
+
+PROVIDE ( asiprintf = 0x40056d9c );
+PROVIDE ( _asiprintf_r = 0x40056d4c );
+PROVIDE ( asniprintf = 0x40056cd8 );
+PROVIDE ( _asniprintf_r = 0x40056c64 );
+PROVIDE ( asnprintf = 0x40056cd8 );
+PROVIDE ( _asnprintf_r = 0x40056c64 );
+PROVIDE ( asprintf = 0x40056d9c );
+PROVIDE ( _asprintf_r = 0x40056d4c );
+PROVIDE ( fiprintf = 0x40056efc );
+PROVIDE ( _fiprintf_r = 0x40056ed8 );
+PROVIDE ( fiscanf = 0x40058884 );
+PROVIDE ( _fiscanf_r = 0x400588b4 );
+PROVIDE ( fprintf = 0x40056efc );
+PROVIDE ( _fprintf_r = 0x40056ed8 );
+PROVIDE ( iprintf = 0x40056978 );
+PROVIDE ( _iprintf_r = 0x40056944 );
+PROVIDE ( printf = 0x40056978 );
+PROVIDE ( _printf_common = 0x40057338 );
+PROVIDE ( _printf_float = 0x4000befc );
+PROVIDE ( _printf_i = 0x40057404 );
+PROVIDE ( _printf_r = 0x40056944 );
+PROVIDE ( siprintf = 0x40056c08 );
+PROVIDE ( _siprintf_r = 0x40056bbc );
+PROVIDE ( sniprintf = 0x40056b4c );
+PROVIDE ( _sniprintf_r = 0x40056ae4 );
+PROVIDE ( snprintf = 0x40056b4c );
+PROVIDE ( _snprintf_r = 0x40056ae4 );
+PROVIDE ( sprintf = 0x40056c08 );
+PROVIDE ( _sprintf_r = 0x40056bbc );
+PROVIDE ( __sprint_r = 0x400577e4 );
+PROVIDE ( _svfiprintf_r = 0x40057100 );
+PROVIDE ( __svfiscanf_r = 0x40057b08 );
+PROVIDE ( _svfprintf_r = 0x40057100 );
+PROVIDE ( __svfscanf = 0x40057f04 );
+PROVIDE ( __svfscanf_r = 0x40057b08 );
+PROVIDE ( vasiprintf = 0x40056eb8 );
+PROVIDE ( _vasiprintf_r = 0x40056e80 );
+PROVIDE ( vasniprintf = 0x40056e58 );
+PROVIDE ( _vasniprintf_r = 0x40056df8 );
+PROVIDE ( vasnprintf = 0x40056e58 );
+PROVIDE ( _vasnprintf_r = 0x40056df8 );
+PROVIDE ( vasprintf = 0x40056eb8 );
+PROVIDE ( _vasprintf_r = 0x40056e80 );
+PROVIDE ( vfiprintf = 0x40057ae8 );
+PROVIDE ( _vfiprintf_r = 0x40057850 );
+PROVIDE ( vfiscanf = 0x40057eb8 );
+PROVIDE ( _vfiscanf_r = 0x40057f24 );
+PROVIDE ( vfprintf = 0x40057ae8 );
+PROVIDE ( _vfprintf_r = 0x40057850 );
+PROVIDE ( vfscanf = 0x40057eb8 );
+PROVIDE ( _vfscanf_r = 0x40057f24 );
+PROVIDE ( viprintf = 0x400569b4 );
+PROVIDE ( _viprintf_r = 0x400569e4 );
+PROVIDE ( viscanf = 0x40058698 );
+PROVIDE ( _viscanf_r = 0x400586c8 );
+PROVIDE ( vprintf = 0x400569b4 );
+PROVIDE ( _vprintf_r = 0x400569e4 );
+PROVIDE ( vscanf = 0x40058698 );
+PROVIDE ( _vscanf_r = 0x400586c8 );
+PROVIDE ( vsiprintf = 0x40056ac4 );
+PROVIDE ( _vsiprintf_r = 0x40056a90 );
+PROVIDE ( vsiscanf = 0x40058740 );
+PROVIDE ( _vsiscanf_r = 0x400586f8 );
+PROVIDE ( vsniprintf = 0x40056a68 );
+PROVIDE ( _vsniprintf_r = 0x40056a14 );
+PROVIDE ( vsnprintf = 0x40056a68 );
+PROVIDE ( _vsnprintf_r = 0x40056a14 );
+PROVIDE ( vsprintf = 0x40056ac4 );
+PROVIDE ( _vsprintf_r = 0x40056a90 );
+PROVIDE ( vsscanf = 0x40058740 );
+PROVIDE ( _vsscanf_r = 0x400586f8 );
+PROVIDE ( fscanf = 0x40058884 );
+PROVIDE ( _fscanf_r = 0x400588b4 );
+PROVIDE ( iscanf = 0x40058760 );
+PROVIDE ( _iscanf_r = 0x4005879c );
+PROVIDE ( scanf = 0x40058760 );
+PROVIDE ( _scanf_chars = 0x40058384 );
+PROVIDE ( _scanf_float = 0x4000bf18 );
+PROVIDE ( _scanf_i = 0x4005845c );
+PROVIDE ( _scanf_r = 0x4005879c );
+PROVIDE ( siscanf = 0x400587d0 );
+PROVIDE ( _siscanf_r = 0x40058830 );
+PROVIDE ( sscanf = 0x400587d0 );
+PROVIDE ( _sscanf_r = 0x40058830 );
+PROVIDE ( __ssvfiscanf_r = 0x4005802c );
+PROVIDE ( __ssvfscanf_r = 0x4005802c );
+
+
+PROVIDE ( UART0 = 0x3ff40000 );
+PROVIDE ( SPI1 = 0x3ff42000 );
+PROVIDE ( SPI0 = 0x3ff43000 );
+PROVIDE ( GPIO = 0x3ff44000 );
+PROVIDE ( SIGMADELTA = 0x3ff44f00 );
+PROVIDE ( RTCCNTL = 0x3ff48000 );
+PROVIDE ( RTCIO = 0x3ff48400 );
+PROVIDE ( SENS = 0x3ff48800 );
+PROVIDE ( HINF = 0x3ff4B000 );
+PROVIDE ( UHCI1 = 0x3ff4C000 );
+PROVIDE ( I2S0 = 0x3ff4F000 );
+PROVIDE ( UART1 = 0x3ff50000 );
+PROVIDE ( I2C0 = 0x3ff53000 );
+PROVIDE ( UHCI0 = 0x3ff54000 );
+PROVIDE ( HOST = 0x3ff55000 );
+PROVIDE ( RMT = 0x3ff56000 );
+PROVIDE ( RMTMEM = 0x3ff56800 );
+PROVIDE ( PCNT = 0x3ff57000 );
+PROVIDE ( SLC = 0x3ff58000 );
+PROVIDE ( LEDC = 0x3ff59000 );
+PROVIDE ( MCPWM0 = 0x3ff5E000 );
+PROVIDE ( TIMERG0 = 0x3ff5F000 );
+PROVIDE ( TIMERG1 = 0x3ff60000 );
+PROVIDE ( SPI2 = 0x3ff64000 );
+PROVIDE ( SPI3 = 0x3ff65000 );
+PROVIDE ( SYSCON = 0x3ff66000 );
+PROVIDE ( I2C1 = 0x3ff67000 );
+PROVIDE ( SDMMC = 0x3ff68000 );
+PROVIDE ( CAN = 0x3ff6B000 );
+PROVIDE ( MCPWM1 = 0x3ff6C000 );
+PROVIDE ( I2S1 = 0x3ff6D000 );
+PROVIDE ( UART2 = 0x3ff6E000 );
+
+/*
+	Address table for SPI driver functions in ESP32 ROM.
+	These functions are only linked from ROM when SPI_FLASH_ROM_DRIVER_PATCH is not set in configuration.
+*/
+
+PROVIDE ( esp_rom_spiflash_write_encrypted = 0x40062e78 );
+PROVIDE ( esp_rom_spiflash_erase_area = 0x400631ac );
+PROVIDE ( esp_rom_spiflash_erase_block = 0x40062c4c );
+PROVIDE ( esp_rom_spiflash_erase_chip = 0x40062c14 );
+PROVIDE ( esp_rom_spiflash_erase_sector = 0x40062ccc );
+PROVIDE ( esp_rom_spiflash_lock = 0x400628f0 );
+PROVIDE ( esp_rom_spiflash_read = 0x40062ed8 );
+PROVIDE ( esp_rom_spiflash_config_readmode = 0x40062b64 ); /* SPIMasterReadModeCnfig */
+PROVIDE ( esp_rom_spiflash_read_status = 0x4006226c );
+PROVIDE ( esp_rom_spiflash_read_statushigh = 0x40062448 );
+PROVIDE ( esp_rom_spiflash_write = 0x40062d50 );
+PROVIDE ( esp_rom_spiflash_enable_write = 0x40062320 );
+PROVIDE ( esp_rom_spiflash_write_status = 0x400622f0 );
+
+/* always using patched versions of these functions 
+PROVIDE ( esp_rom_spiflash_wait_idle = 0x400622c0 );
+PROVIDE ( esp_rom_spiflash_unlock = 0x400????? );
+*/
+
+
+/* These are the .bss/.data symbols used by newlib functions present in ESP32 ROM.
+   See also esp32.rom.newlib-funcs.ld for the list of general newlib functions,
+   and esp32.rom.newlib-nano.ld for "nano" versions of printf/scanf family of functions.
+
+   Unlike other ROM functions and data which are exported using PROVIDE, which declares
+   weak symbols, newlib related functions are exported using assignment,
+   which declares strong symbols. This is done so that ROM functions are always
+   used instead of the ones provided by libc.a.
+ */
+
+_ctype_ = 0x3ff96354;
+__ctype_ptr__ = 0x3ff96350;
+environ = 0x3ffae0b4;
+_global_impure_ptr = 0x3ffae0b0;
+__mb_cur_max = 0x3ff96530;
+__sf_fake_stderr = 0x3ff96458;
+__sf_fake_stdin = 0x3ff96498;
+__sf_fake_stdout = 0x3ff96478;
+__wctomb = 0x3ff96540;
+
+/* These are the newlib functions present in ESP32 ROM.
+   They should not be used when compiling with PSRAM cache workaround enabled.
+   See also esp32.rom.newlib-data.ld for the list of .data/.bss symbols
+   used by these functions, and esp32.rom.newlib-nano.ld for "nano" versions
+   of printf/scanf family of functions.
+
+   Unlike other ROM functions which are exported using PROVIDE, which declares
+   weak symbols, newlib related functions are exported using assignment,
+   which declares strong symbols. This is done so that ROM functions are always
+   used instead of the ones provided by libc.a.
+
+   Time functions were moved to the esp32.rom.newlib-time.ld file.
+ */
+
+abs = 0x40056340;
+__ascii_wctomb = 0x40058ef0;
+atoi = 0x400566c4;
+_atoi_r = 0x400566d4;
+atol = 0x400566ec;
+_atol_r = 0x400566fc;
+bzero = 0x4000c1f4;
+_cleanup = 0x40001df8;
+_cleanup_r = 0x40001d48;
+creat = 0x40000e8c;
+div = 0x40056348;
+__dummy_lock = 0x4000c728;
+__dummy_lock_try = 0x4000c730;
+__env_lock = 0x40001fd4;
+__env_unlock = 0x40001fe0;
+fclose = 0x400020ac;
+_fclose_r = 0x40001fec;
+fflush = 0x40059394;
+_fflush_r = 0x40059320;
+_findenv_r = 0x40001f44;
+__fp_lock_all = 0x40001f1c;
+__fp_unlock_all = 0x40001f30;
+__fputwc = 0x40058da0;
+fputwc = 0x40058ea8;
+_fputwc_r = 0x40058e4c;
+_fwalk = 0x4000c738;
+_fwalk_reent = 0x4000c770;
+_getenv_r = 0x40001fbc;
+isalnum = 0x40000f04;
+isalpha = 0x40000f18;
+isascii = 0x4000c20c;
+_isatty_r = 0x40000ea0;
+isblank = 0x40000f2c;
+iscntrl = 0x40000f50;
+isdigit = 0x40000f64;
+isgraph = 0x40000f94;
+islower = 0x40000f78;
+isprint = 0x40000fa8;
+ispunct = 0x40000fc0;
+isspace = 0x40000fd4;
+isupper = 0x40000fe8;
+__itoa = 0x40056678;
+itoa = 0x400566b4;
+labs = 0x40056370;
+ldiv = 0x40056378;
+longjmp = 0x400562cc;
+memccpy = 0x4000c220;
+memchr = 0x4000c244;
+memcmp = 0x4000c260;
+memcpy = 0x4000c2c8;
+memmove = 0x4000c3c0;
+memrchr = 0x4000c400;
+memset = 0x4000c44c;
+qsort = 0x40056424;
+rand = 0x40001058;
+rand_r = 0x400010d4;
+__sccl = 0x4000c498;
+__sclose = 0x400011b8;
+__seofread = 0x40001148;
+setjmp = 0x40056268;
+__sflush_r = 0x400591e0;
+__sfmoreglue = 0x40001dc8;
+__sfp = 0x40001e90;
+__sfp_lock_acquire = 0x40001e08;
+__sfp_lock_release = 0x40001e14;
+__sfvwrite_r = 0x4005893c;
+__sinit = 0x40001e38;
+__sinit_lock_acquire = 0x40001e20;
+__sinit_lock_release = 0x40001e2c;
+__smakebuf_r = 0x40059108;
+srand = 0x40001004;
+__sread = 0x40001118;
+__srefill_r = 0x400593d4;
+__sseek = 0x40001184;
+strcasecmp = 0x400011cc;
+strcasestr = 0x40001210;
+strcat = 0x4000c518;
+strchr = 0x4000c53c;
+strcmp = 0x40001274;
+strcoll = 0x40001398;
+strcpy = 0x400013ac;
+strcspn = 0x4000c558;
+strdup = 0x4000143c;
+_strdup_r = 0x40001450;
+strlcat = 0x40001470;
+strlcpy = 0x4000c584;
+strlen = 0x400014c0;
+strlwr = 0x40001524;
+strncasecmp = 0x40001550;
+strncat = 0x4000c5c4;
+strncmp = 0x4000c5f4;
+strncpy = 0x400015d4;
+strndup = 0x400016b0;
+_strndup_r = 0x400016c4;
+strnlen = 0x4000c628;
+strrchr = 0x40001708;
+strsep = 0x40001734;
+strspn = 0x4000c648;
+strstr = 0x4000c674;
+__strtok_r = 0x4000c6a8;
+strtok_r = 0x4000c70c;
+strtol = 0x4005681c;
+_strtol_r = 0x40056714;
+strtoul = 0x4005692c;
+_strtoul_r = 0x40056834;
+strupr = 0x4000174c;
+__submore = 0x40058f3c;
+__swbuf = 0x40058cb4;
+__swbuf_r = 0x40058bec;
+__swrite = 0x40001150;
+__swsetup_r = 0x40058cc8;
+toascii = 0x4000c720;
+tolower = 0x40001868;
+toupper = 0x40001884;
+ungetc = 0x400590f4;
+_ungetc_r = 0x40058fa0;
+__utoa = 0x400561f0;
+utoa = 0x40056258;
+wcrtomb = 0x40058920;
+_wcrtomb_r = 0x400588d8;
+_wctomb_r = 0x40058f14;
+
+
+/* These ROM functions call respective entries in the syscall table.
+   They are called by other ROM functions (mostly from newlib).
+   We don't link to them directly, since in IDF there are actual
+   implementations of these functions, with same names.
+
+   I.e.:
+
+   times (in ROM) -> _times_r (in ROM) -> syscall table entry _times_r -> _times_r (in IDF)
+
+   Hence the following entries are provided only for reference
+   and commented out.
+ */  
+
+/*   <--- the following lines are commented out
+
+PROVIDE ( calloc = 0x4000bee4 );
+PROVIDE ( free = 0x4000beb8 );
+PROVIDE ( _free_r = 0x4000bbcc );
+PROVIDE ( _getpid_r = 0x4000bcfc );
+PROVIDE ( __getreent = 0x4000be8c );
+PROVIDE ( _gettimeofday_r = 0x4000bc58 );
+PROVIDE ( _kill_r = 0x4000bd10 );
+PROVIDE ( _lock_acquire = 0x4000be14 );
+PROVIDE ( _lock_acquire_recursive = 0x4000be28 );
+PROVIDE ( _lock_close = 0x4000bdec );
+PROVIDE ( _lock_close_recursive = 0x4000be00 );
+PROVIDE ( _lock_init = 0x4000bdc4 );
+PROVIDE ( _lock_init_recursive = 0x4000bdd8 );
+PROVIDE ( _lock_release = 0x4000be64 );
+PROVIDE ( _lock_release_recursive = 0x4000be78 );
+PROVIDE ( _lock_try_acquire = 0x4000be3c );
+PROVIDE ( _lock_try_acquire_recursive = 0x4000be50 );
+PROVIDE ( malloc = 0x4000bea0 );
+PROVIDE ( _malloc_r = 0x4000bbb4 );
+PROVIDE ( _raise_r = 0x4000bc70 );
+PROVIDE ( realloc = 0x4000becc );
+PROVIDE ( _realloc_r = 0x4000bbe0 );
+PROVIDE ( _sbrk_r = 0x4000bce4 );
+PROVIDE ( _system_r = 0x4000bc10 );
+PROVIDE ( _times_r = 0x4000bc40 );
+PROVIDE ( _close_r = 0x4000bd3c );
+PROVIDE ( _exit_r = 0x4000bd28 );
+PROVIDE ( _fstat_r = 0x4000bccc );
+PROVIDE ( _link_r = 0x4000bc9c );
+PROVIDE ( _lseek_r = 0x4000bd8c );
+PROVIDE ( _open_r = 0x4000bd54 );
+PROVIDE ( _read_r = 0x4000bda8 );
+PROVIDE ( _rename_r = 0x4000bc28 );
+PROVIDE ( _unlink_r = 0x4000bc84 );
+PROVIDE ( _write_r = 0x4000bd70 );
+
+    ---> end commented out block
+*/
+
+
+/* These are the non-reentrant versions of syscalls present in the ROM.
+   They call the reentrant versions, passing the pointer returned by __getreent
+   as the first argument.
+ */
+
+close = 0x40001778;
+open = 0x4000178c;
+read = 0x400017dc;
+sbrk = 0x400017f4;
+times = 0x40001808;
+write = 0x4000181c;
