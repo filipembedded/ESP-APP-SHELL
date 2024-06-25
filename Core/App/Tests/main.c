@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
-#include "ll/gpio_ll.h"
+#include "gpio_ll.h"
+
 
 int main();
 
@@ -27,20 +28,11 @@ void __attribute__((noreturn)) call_start_cpu1(void){
   }
 }
 
-gpio_dev_t dev;
-
 /* IRAM_ATTR for interrupt functions */
 
 int __attribute__((noreturn)) main() {
-
-  gpio_ll_output_enable(&dev, GPIO_NUM_2);
-  gpio_ll_iomux_func_sel(GPIO_NUM_2, FUNC_GPIO2_GPIO2);
-
-
   while(1) {
-    for (volatile int i = 0; i < 100000; i++);
-    gpio_ll_set_level(&dev, GPIO_NUM_2, 1);
-    for (volatile int i = 0; i < 100000; i++);
-    gpio_ll_set_level(&dev, GPIO_NUM_2, 0);
+
+
   }
 }
