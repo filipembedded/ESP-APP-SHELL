@@ -1,0 +1,39 @@
+{
+    "version": 4,
+    "cmakeMinimumRequired": {
+      "major": 3,
+      "minor": 0,
+      "patch": 0
+    },
+    "configurePresets": [
+      {
+        "name": "esp32_debug",
+        "displayName": "ESP32 Debug",
+        "toolchainFile": "Cmake/xtensa-esp32.cmake",
+        "binaryDir": "${sourceDir}/build",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": "Debug",
+          "DEVICE": {
+            "type": "STRING",
+            "value": "ESP32"
+          },
+          "CORE": {
+            "type": "STRING",
+            "value": "-mcpu=esp32"
+          },
+          "MAIN_REL_PATH": {
+            "type": "STRING",
+            "value": "TestApp"
+          }
+        }
+      },
+      {
+        "name": "esp32_release",
+        "inherits": "esp32_debug",
+        "displayName": "ESP32 Release",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": "Release"
+        }
+      }
+    ]
+}

@@ -1,7 +1,0 @@
-{
-    "files.associations": {
-        "spi_periph.h": "c",
-        "soc_caps.h": "c",
-        "assert.h": "c"
-    }
-}
