@@ -8,12 +8,8 @@
 
 #include <stdio.h>
 #include <stdbool.h>
-#include "sdkconfig.h"
-#include "esp_err.h"
-#include "esp_intr_alloc.h"
 #include "soc/soc_caps.h"
 #include "hal/gpio_types.h"
-#include "esp_rom_gpio.h"
 #include "driver/gpio_etm.h"
 
 #ifdef __cplusplus
