@@ -1,7 +1,0 @@
-{
-    "files.associations": {
-        "gpio_ll.h": "c"
-    },
-    "idf.port": "/dev/ttyUSB1",
-    "idf.flashType": "UART"
-}

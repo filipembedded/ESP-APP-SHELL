@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "ESP32 OpenOCD",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/build/Core/App/app.elf",
+        "miDebuggerServerAddress": "localhost:3333",
+        "miDebuggerPath": "${workspaceFolder}/Toolchain/ESP32/bin/xtensa-esp32-elf-gdb",
+        "cwd": "${workspaceFolder}",
+        "setupCommands": [
+          {
+            "description": "Enable pretty-printing for gdb",
+            "text": "-enable-pretty-printing",
+            "ignoreFailures": true
+          },
+          {
+            "text": "target remote localhost:3333"
+          },
+          {
+            "text": "monitor reset halt"
+          },
+          {
+            "text": "monitor reset init"
+          }
+        ],
+        "externalConsole": false,
+        "logging": {
+          "engineLogging": true
+        },
+        "preLaunchTask": "openocd"
+      }
+    ]
+  }
